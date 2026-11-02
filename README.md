@@ -25,6 +25,31 @@ The code is public so anyone can read and check it. It is **not open source**: s
   ending balance.
 - **Beta.** The game is still being improved. Please read the Terms on the site before playing.
 
+## What the casino can do, and what it relies on
+
+Because the casino holds the balances, players rely on it running these services honestly. The operator can:
+
+- pause automatic payouts, close top ups or withdrawals, and pause a player's account;
+- cancel a withdrawal that has not been signed yet (the money goes back to the player's balance);
+- change the minimum withdrawal, the network fee setting and the short delay before a payout is sent;
+- change the payout table (a table worse than standard needs the player to accept it before they play);
+- send money that is not owed to players from the casino wallet to the treasury (owner only, with a
+  password and an authenticator code, and a new treasury address is locked for 48 hours).
+
+What the code makes sure of, and what it cannot:
+
+- A spin's possible win is counted against the casino wallet from the moment the bet is accepted until the
+  player's new balance is in the central records. Every accepted bet fits what the wallet holds.
+- A top up is credited after a few blocks so it can be played straight away, but it can only be withdrawn
+  once Ethereum has made its block final (about 15 minutes). If a credited transfer ever disappears from
+  the chain, the credit is taken back with its own ledger entry and the account is paused for review.
+- A credit must match a recorded on-chain deposit for that player, and the payout signer only pays money that
+  is held in the player's own wallet record, to the wallet that deposited.
+- These are software rules on Cloudflare, not on-chain guarantees. Anyone with deploy access to the Cloudflare
+  account (the operator) could change any of them. That access is protected separately (strong login, two
+  factor, narrow API tokens). The fairness of each spin is the part players can check themselves, without
+  trusting the server.
+
 ## What is in here
 
 | Folder | What it is |

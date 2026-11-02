@@ -8,6 +8,8 @@ import { injected } from 'wagmi/connectors';
 import { connect, disconnect, getConnection, getChainId, reconnect, signMessage, switchChain, watchConnection, writeContract } from 'wagmi/actions';
 import { createSiweMessage } from 'viem/siwe';
 import { walletApi, shortAddress } from './walletApi.js';
+import { siweFieldsProblem, SIWE_MISMATCH } from './siweCheck.js';
+import { CHAIN_ID } from './depositTarget.js';
 
 const ERC20_TRANSFER = [{ type: 'function', name: 'transfer', stateMutability: 'nonpayable',
   inputs: [{ name: 'to', type: 'address' }, { name: 'amount', type: 'uint256' }], outputs: [{ type: 'bool' }] }];
@@ -77,6 +79,7 @@ export async function signIn() {
   try {
     const address = await connectAccount();
     const n = await walletApi.nonce();
+    if (siweFieldsProblem(n, { host: window.location.host, origin: window.location.origin, chainId: CHAIN_ID })) throw Object.assign(new Error(SIWE_MISMATCH), { status: 400 });
     const message = createSiweMessage({ domain: n.domain, address, uri: n.uri, version: '1', chainId: n.chainId,
       nonce: n.nonce, issuedAt: new Date(), statement: n.statement });
     const signature = await signMessage(config, { account: address, message });
