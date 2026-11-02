@@ -9,7 +9,7 @@ import worker, { DemoCasino } from './index.js';
 import { clearConfigCache } from './platform.js';
 import { createD1 } from '../test-support/d1shim.mjs';
 import { weiToUnits, unitsToWei, formatTics, normAddress, OFFICIAL_TICS, TRANSFER_TOPIC, decodeTransfers, rpcClient } from './tics.js';
-import { chainTick, parseHoldings, refreshHoldings, HOLDINGS_DAILY_CAP, sweepSpinHolds, liveFloat, reserveSpinExposure, HOLD_ALERT_AFTER_MS } from './wallet.js';
+import { chainTick, parseHoldings, refreshHoldings, HOLDINGS_DAILY_CAP, sweepSpinHolds, liveFloat, reserveSpinExposure, HOLD_ALERT_AFTER_MS, finalizeDeposits, FINAL_MISS_CONFIRM_MS } from './wallet.js';
 
 const MIGRATIONS = ['0001_platform.sql', '0002_payments.sql', '0003_tics.sql', '0004_spin_holds.sql', '0005_audit_fixes.sql', '0006_admin.sql', '0007_r3.sql', '0008_reaudit.sql'].map((f) => new URL(`../migrations/${f}`, import.meta.url).pathname);
 const HOST = 'betics.example';
@@ -43,6 +43,7 @@ function fakeChain() {
       return chain.logs.filter((l) => Number(l.blockNumber) >= from && Number(l.blockNumber) <= to && l.address === f.address && l.topics[2] === f.topics[2]);
     }
     if (method === 'eth_getTransactionReceipt') return chain.receipts.get(params[0]) || null;
+    if (method === 'eth_getBlockByNumber' && params[0] === 'finalized') return { number: `0x${(chain.finalized ?? chain.block).toString(16)}` };
     if (method === 'eth_call') return `0x${chain.tokenBalance.toString(16).padStart(64, '0')}`;
     if (method === 'eth_getBalance') return `0x${chain.ethBalance.toString(16)}`;
     throw new Error(`unexpected ${method}`);
@@ -303,7 +304,7 @@ test('withdrawal fee: the player pays the payout gas, priced in $TICS, with a ma
       ? Response.json({ qubetics: { eth: 0.000002, usd: 0.006 } }) : inner(url, init);
     try {
       p.chain.rpc.base = p.chain.rpc;
-      const rpc = async (m, params) => m === 'eth_getBlockByNumber' ? { baseFeePerGas: '0x77359400' } : m === 'eth_maxPriorityFeePerGas' ? '0x3b9aca00' : p.chain.rpc(m, params);
+      const rpc = async (m, params) => m === 'eth_getBlockByNumber' && params?.[0] !== 'finalized' ? { baseFeePerGas: '0x77359400' } : m === 'eth_maxPriorityFeePerGas' ? '0x3b9aca00' : p.chain.rpc(m, params);
       await chainTick(p.env, { rpc });
     } finally { globalThis.fetch = realFetch; }
     // gas = 65,000 x (2 x 2 gwei + 1 gwei) = 0.000325 ETH; / 0.000002 ETH per $TICS = 162.5 $TICS; +20% = 195 $TICS.
@@ -1244,4 +1245,95 @@ test('R1 a spin that never reached the wallet: the cron closes it, frees the boo
     assert.equal((await p.spin(a.cookie, [{ type: 'red', amountCents: 10_000 }], 'real')).status, 200);
     assert.equal(p.rows('SELECT COUNT(*) AS n FROM spin_holds')[0].n, 0);
   } finally { p.restore(); }
+});
+
+test('R2 a top up can be played at once but only withdrawn once its block is final', async () => {
+  const p = platform();
+  try {
+    p.chain.finalized = 980; // Ethereum has not finalized block 990 yet
+    const a = await funded(p, 5000n);
+    assert.equal(await realOf(p, a.cookie), 500_000, 'credited at once');
+    const [dep] = p.rows('SELECT * FROM chain_deposits WHERE player_id = ?', a.address);
+    assert.equal(dep.finalized_at, null);
+    // Playing with it works.
+    assert.equal((await p.spin(a.cookie, [{ type: 'red', amountCents: 10_000 }], 'real')).status, 200);
+    const bal = await realOf(p, a.cookie);
+    // Withdrawing it does not, with a plain reason, and nothing is held.
+    const w = await a.wd(100_000);
+    assert.equal(w.status, 402, JSON.stringify(w.data));
+    assert.match(w.data.error, /about 15 minutes/);
+    assert.equal(await realOf(p, a.cookie), bal);
+    assert.equal(p.rows('SELECT COUNT(*) AS n FROM chain_withdrawals')[0].n, 0, 'claim removed');
+    // Once the block is final, the cron finds the transfer again and withdrawals work.
+    p.chain.finalized = 1000;
+    await chainTick(p.env, { rpc: p.chain.rpc });
+    assert.ok(p.rows('SELECT finalized_at FROM chain_deposits WHERE id = ?', dep.id)[0].finalized_at);
+    assert.equal((await a.wd(100_000)).status, 200);
+  } finally { p.restore(); }
+});
+
+test('R2 a credited top up that disappears from the chain is taken back, the account paused and owners alerted', async () => {
+  const p = platform();
+  try {
+    p.chain.finalized = 980;
+    const a = await funded(p, 5000n);
+    const [dep] = p.rows('SELECT * FROM chain_deposits WHERE player_id = ?', a.address);
+    // The player plays some of it away first.
+    assert.equal((await p.spin(a.cookie, [{ type: 'red', amountCents: 10_000 }], 'real')).status, 200);
+    const bal = await realOf(p, a.cookie);
+    // The transfer vanishes (a deep reorg or a provider that answered wrongly) and its block becomes final.
+    p.chain.receipts.delete(dep.tx_hash);
+    p.chain.finalized = 1000;
+    const settings = JSON.parse(p.rows("SELECT value FROM settings WHERE key = 'tics_payments'")[0].value);
+    const t0 = Date.now();
+    // One empty answer is never enough.
+    let out = await finalizeDeposits(p.env, settings, p.chain.rpc, { now: t0 });
+    assert.equal(out.missing, 1); assert.equal(out.reversed, 0);
+    assert.equal(await realOf(p, a.cookie), bal);
+    // A second provider that still sees it stops the reversal.
+    const seen = async (m, prm) => (m === 'eth_getTransactionReceipt' ? { status: '0x1' } : p.chain.rpc(m, prm));
+    out = await finalizeDeposits(p.env, settings, p.chain.rpc, { rpc2: seen, now: t0 + FINAL_MISS_CONFIRM_MS + 1000 });
+    assert.equal(out.reversed, 0);
+    assert.equal(await realOf(p, a.cookie), bal);
+    // Two misses minutes apart, and the second provider agrees: the credit is taken back.
+    const gone = async (m, prm) => (m === 'eth_getTransactionReceipt' ? null : p.chain.rpc(m, prm));
+    await finalizeDeposits(p.env, settings, p.chain.rpc, { rpc2: gone, now: t0 + 2 * FINAL_MISS_CONFIRM_MS });
+    out = await finalizeDeposits(p.env, settings, p.chain.rpc, { rpc2: gone, now: t0 + 4 * FINAL_MISS_CONFIRM_MS });
+    assert.equal(out.reversed, 1);
+    const take = Math.min(bal, dep.amount_units);
+    assert.equal(await realOf(p, a.cookie), bal - take, 'the deposit amount is taken back, never below zero');
+    const [row] = p.rows('SELECT * FROM chain_deposits WHERE id = ?', dep.id);
+    assert.ok(row.reversed_at);
+    assert.equal(p.rows('SELECT status FROM players WHERE id = ?', a.address)[0].status, 'frozen');
+    const [alert] = p.rows("SELECT * FROM alerts WHERE type = 'tics_deposit_gone'");
+    assert.equal(alert.severity, 'critical');
+    if (bal < dep.amount_units) assert.match(alert.details, /could not be taken back/); else assert.doesNotMatch(alert.details, /could not be taken back/);
+    const led = p.rows("SELECT * FROM ledger WHERE player_id = ? AND type = 'deposit_reversal'", a.address);
+    assert.equal(led.length, 1, 'own ledger row in the central copy');
+    assert.equal(led[0].amount_cents, -take);
+    // Running it again changes nothing, and the deposit can never be credited again.
+    await finalizeDeposits(p.env, settings, p.chain.rpc, { rpc2: gone, now: t0 + 6 * FINAL_MISS_CONFIRM_MS });
+    assert.equal(p.rows("SELECT COUNT(*) AS n FROM ledger WHERE type = 'deposit_reversal'")[0].n, 1);
+    const again = await p.env.CASINO.get(a.address).fetch(new Request('https://wallet/internal/tics-deposit', { method: 'POST', headers: { 'X-Internal-Secret': 'test-secret', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ref: `td:1-${dep.tx_hash}-${dep.log_index}`, amountCents: dep.amount_units, playerId: a.address }) }));
+    assert.ok([200, 409].includes(again.status));
+    assert.equal(await realOf(p, a.cookie), bal - take);
+  } finally { p.restore(); }
+});
+
+test('R2 reversal never takes the balance below zero: the part already gone is reported', async () => {
+  const DB = createD1(MIGRATIONS);
+  const obj = new DemoCasino({ storage: doStorage() }, { DB, INTERNAL_SECRET: 's' });
+  obj.setMeta('player_id', 'p1'); obj.init({}, 1000);
+  obj.ticsOp('tics-deposit', { ref: `td:1-0x${'11'.repeat(32)}-0`, amountCents: 500 });
+  obj.ticsOp('tics-hold', { ref: 'th:aaaaaaaa-1', amountCents: 400 }); // most of it already withdrawn
+  const r = obj.ticsOp('tics-deposit-reverse', { ref: `td:1-0x${'11'.repeat(32)}-0`, amountCents: 500 });
+  assert.deepEqual([r.reversedCents, r.shortCents, obj.ticsBalance()], [100, 400, 0]);
+  assert.ok(obj.ticsReconciled(), 'balance still equals its ledger');
+  assert.equal(obj.ticsOp('tics-deposit-reverse', { ref: `td:1-0x${'11'.repeat(32)}-0`, amountCents: 500 }).duplicate, true);
+  // A reversal for a deposit never credited here closes it, so a late credit moves nothing.
+  const ref2 = `td:1-0x${'22'.repeat(32)}-0`;
+  assert.equal(obj.ticsOp('tics-deposit-reverse', { ref: ref2, amountCents: 300 }).reversedCents, 0);
+  assert.equal(obj.ticsOp('tics-deposit', { ref: ref2, amountCents: 300 }).duplicate, true);
+  assert.equal(obj.ticsBalance(), 0);
 });

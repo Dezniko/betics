@@ -9,7 +9,7 @@ ALTER TABLE chain_deposits ADD COLUMN finalized_at TEXT;
 ALTER TABLE chain_deposits ADD COLUMN final_miss_at INTEGER;
 ALTER TABLE chain_deposits ADD COLUMN reversed_at TEXT;
 UPDATE chain_deposits SET finalized_at = datetime('now');
-CREATE INDEX IF NOT EXISTS chain_deposits_unfinal ON chain_deposits (player_id, block_number) WHERE credited_at IS NOT NULL AND finalized_at IS NULL;
+CREATE INDEX IF NOT EXISTS chain_deposits_unfinal ON chain_deposits (block_number) WHERE finalized_at IS NULL;
 
 -- R1: a spin's possible win stays counted until that player's new balance is in the central copy.
 -- booked_at (ms) lets the cron ask the player's wallet about bookings that were not released.

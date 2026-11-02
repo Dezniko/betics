@@ -651,11 +651,32 @@ export class DemoCasino {
           // Never pay out from a balance that does not match its own ledger.
           if (!this.ticsReconciled()) fail(409, 'balance check failed');
           if (current < body.amountCents) fail(402, 'not enough real balance');
+          // Money from a top up that Ethereum has not finalized yet stays here (re-audit R2).
+          const keep = Number.isSafeInteger(body.keepCents) && body.keepCents > 0 ? body.keepCents : 0;
+          if (current - keep < body.amountCents) fail(402, `${formatTics(Math.min(keep, current))} from your latest top up can be withdrawn about 15 minutes after it arrived, once Ethereum has confirmed it for good. You can withdraw up to ${formatTics(Math.max(0, current - keep))} now.`);
           this.setTics(current - body.amountCents, 'withdrawal_hold', -body.amountCents, { ref: body.ref });
           this.sql.exec("INSERT INTO holds (ref, units, status) VALUES (?, ?, 'held')", body.ref, body.amountCents);
         }
         this.sql.exec('INSERT INTO processed_payments (ref) VALUES (?)', body.ref);
         return { duplicate: false, realTicsCents: this.ticsBalance() };
+      }
+      if (kind === 'tics-deposit-reverse') {
+        // A credited top up whose transfer is gone from the chain (re-audit R2). Takes back what the
+        // balance still has, never below zero, with its own ledger row; once per deposit.
+        if (!body.ref.startsWith('td:') || !Number.isSafeInteger(body.amountCents) || body.amountCents <= 0) fail(400, 'invalid reversal');
+        const rref = `rv:${body.ref.slice(3)}`;
+        const done = this.one('SELECT ref FROM processed_payments WHERE ref = ?', rref);
+        if (done) return { duplicate: true, reversedCents: 0, shortCents: 0, realTicsCents: this.ticsBalance() };
+        if (!this.one('SELECT ref FROM processed_payments WHERE ref = ?', body.ref)) {
+          // Never credited here: close the ref so a credit still on its way is answered as a duplicate.
+          this.sql.exec('INSERT OR IGNORE INTO processed_payments (ref) VALUES (?)', body.ref);
+          this.sql.exec('INSERT INTO processed_payments (ref) VALUES (?)', rref);
+          return { duplicate: false, reversedCents: 0, shortCents: 0, realTicsCents: this.ticsBalance() };
+        }
+        const current = this.ticsBalance(), take = Math.min(current, body.amountCents);
+        if (take > 0) this.setTics(current - take, 'deposit_reversal', -take, { ref: body.ref, reason: 'transfer gone from the chain', shortCents: body.amountCents - take });
+        this.sql.exec('INSERT INTO processed_payments (ref) VALUES (?)', rref);
+        return { duplicate: false, reversedCents: take, shortCents: body.amountCents - take, realTicsCents: this.ticsBalance() };
       }
       const hold = this.one('SELECT * FROM holds WHERE ref = ?', body.ref);
       // Read-only: lets the payouts Worker confirm a withdrawal's money is really held before it signs.
@@ -904,7 +925,7 @@ export class DemoCasino {
         if (method === 'GET' && pathname === '/internal/wallet') return json({ ...this.wallet(), realBalanceCents: this.realBalance(), playerId: this.getMeta('player_id'), ticsReconciled: this.ticsReconciled() });
         const op = pathname.match(/^\/internal\/(deposit|withdraw-hold|withdraw-release)$/);
         if (method === 'POST' && op) { const result = this.paymentOp(op[1], body); await this.flush(); return json(result); }
-        const tics = pathname.match(/^\/internal\/(tics-deposit|tics-hold|tics-finalise|tics-release|tics-hold-check|tics-hold-void)$/);
+        const tics = pathname.match(/^\/internal\/(tics-deposit|tics-deposit-reverse|tics-hold|tics-finalise|tics-release|tics-hold-check|tics-hold-void)$/);
         if (method === 'POST' && tics && tics[1] === 'tics-deposit') await this.depositEvidence(body);
         if (method === 'POST' && tics) { const result = this.ticsOp(tics[1], body); if (!tics[1].startsWith('tics-hold-')) await this.flush(); return json(result); }
         fail(404, 'demo endpoint not found');
