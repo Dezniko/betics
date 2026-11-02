@@ -47,7 +47,7 @@ export default function HowItWorksPage() {
     <p>After each spin your browser checks the result and the payout by itself. If anything does not match, the game stops and tells you.</p>
 
     <h2>Withdrawals</h2>
-    <p>Withdrawals are sent automatically and only go to the wallet that made the deposit. The network fee is shown before you confirm, and a minimum amount applies. Payouts can be held for a safety check when a transfer looks unusual, but your balance stays yours while that happens.</p>
+    <p>Withdrawals are sent automatically and only go to the wallet that made the deposit. The network fee is shown before you confirm, and a minimum amount applies. Payouts can be held for a safety check when a transfer looks unusual, but your balance stays yours while that happens. After a top up, withdrawals open about 15 minutes later, once Ethereum has confirmed it for good. You can play in the meantime.</p>
 
     <h2>How your balance is covered</h2>
     <p>The casino wallet is a public Ethereum address, so anyone can see what it holds. Every player balance counts as money the casino owes. Only what is left after that, the free float, can be used to pay wins.</p>

@@ -514,6 +514,7 @@ body:has(.mobile-game) { height: 100dvh; min-height: 0; overflow: hidden; oversc
 .wallet-status a, .wallet-activity a, .fair-foot a, .site-foot a, .age-gate a { color: #ecd08e; text-decoration: underline; text-underline-offset: 2px; }
 .wallet-ok { color: #6ee7a8 !important; }
 .wallet-bad { color: #fca5a5 !important; }
+.wallet-wait { color: #fcd34d !important; }
 .wallet-check { display: flex; align-items: center; gap: 8px; font-size: 14px; min-height: 36px; }
 .wallet-check input { width: 20px; height: 20px; accent-color: #d6b06a; flex-shrink: 0; }
 .wallet-activity { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }

@@ -4,7 +4,7 @@ import { fmtMoney } from './chips.js';
 import Avatar from './Avatar.jsx';
 import CasinoReserve from './CasinoReserve.jsx';
 import SupportLink, { SUPPORT_URL } from './Support.jsx';
-import { walletApi, shortAddress, explorerTx, parseTicsInput, nextWithdrawRequest, withdrawReviewFee, DEPOSIT_TEXT, WITHDRAW_NOTE, withdrawText, heldRowText } from './walletApi.js';
+import { walletApi, shortAddress, explorerTx, parseTicsInput, nextWithdrawRequest, withdrawReviewFee, DEPOSIT_TEXT, WITHDRAW_NOTE, withdrawText, heldRowText, TOPUP_WAIT_NOTE, creditedText, withdrawWaitText } from './walletApi.js';
 import { topUpState, DEPOSIT_PAUSED_MESSAGE, DEPOSITS_CLOSED_MESSAGE, CASINO_WALLET } from './depositTarget.js';
 
 const when = (s) => (s ? String(s).replace('T', ' ').slice(0, 16) : '');
@@ -21,7 +21,7 @@ function TopUp({ profile, deposit, onTopUp }) {
   let status = null;
   if (deposit) {
     if (deposit.status === 'confirming') status = `Confirming ${Math.min(deposit.confirmations || 0, deposit.required)} of ${deposit.required}`;
-    else if (deposit.status === 'credited') status = `Credited ${fmtMoney(deposit.amountCents || 0)}`;
+    else if (deposit.status === 'credited') status = creditedText(fmtMoney(deposit.amountCents || 0));
     else status = deposit.error || DEPOSIT_TEXT[deposit.status] || 'Checking...';
   }
   // A top up already on its way keeps showing its progress even while top ups are closed or paused.
@@ -40,6 +40,7 @@ function TopUp({ profile, deposit, onTopUp }) {
           disabled={active} onChange={(e) => setAmount(e.target.value)} data-testid="topup-amount" />
         <button type="button" className="fair-btn" disabled={!units || tooSmall || active} onClick={() => onTopUp(units)} data-testid="topup-send">Top up</button>
       </div>
+      <p className="fair-note" data-testid="topup-wait-note">{TOPUP_WAIT_NOTE}</p>
       {tooSmall && <p className="fair-note">The smallest top up is {fmtMoney(profile.minDepositCents)}.</p>}
       {statusLine}
       <p className="fair-note">You need a small amount of ETH in your wallet to send the deposit.</p>
@@ -75,6 +76,14 @@ function Withdraw({ profile, wallet, onDone }) {
     const t = setInterval(loadQuote, 30000);
     return () => clearInterval(t);
   }, [allowed]);
+  // While the newest top up is not final yet: a note with an estimate, refreshed every 15 s, and no Withdraw.
+  const [now, setNow] = useState(Date.now());
+  const waitText = withdrawWaitText(profile.withdrawPendingSince, now);
+  useEffect(() => {
+    if (!profile.withdrawPendingSince) return;
+    const t = setInterval(() => setNow(Date.now()), 15000);
+    return () => clearInterval(t);
+  }, [profile.withdrawPendingSince]);
   const units = parseTicsInput(amount);
   const fee = quote ? (quote.feesEnabled === false ? 0 : quote.feeCents) : profile.withdrawalFeeCents || 0;
   const min = quote ? quote.minWithdrawalCents : profile.minWithdrawalCents;
@@ -85,7 +94,7 @@ function Withdraw({ profile, wallet, onDone }) {
   const { shownFee, feeChanged } = withdrawReviewFee({ confirming, frozenFee, fee });
   const problem = !units ? null : units > real ? 'That is more than your real balance.' : units < min ? `The smallest withdrawal is ${fmtMoney(min)}.` : shownFee > 0 && units <= shownFee ? 'The amount must be more than the network fee.' : null;
   // Step 1: Withdraw opens the confirm view. Step 2: Confirm sends, with the shown fee as maxFeeCents.
-  const review = () => { if (!units || problem || busy) return; setMessage(null); setFrozenFee(fee); setConfirming(true); };
+  const review = () => { if (!units || problem || busy || waitText) return; setMessage(null); setFrozenFee(fee); setConfirming(true); };
   const send = async () => {
     if (!units || problem || busy || !confirming) return;
     const agreedFee = shownFee;
@@ -128,6 +137,7 @@ function Withdraw({ profile, wallet, onDone }) {
         </div>
         {message && <p className={`wallet-status ${message.ok ? 'wallet-ok' : 'wallet-bad'}`} data-testid="withdraw-message">{message.text}</p>}
       </div> : <>
+      {waitText && <p className="fair-note wallet-wait" data-testid="withdraw-wait">{waitText}</p>}
       <div className="fair-btn-row">
         <input id="withdraw-amount" name="withdrawAmount" autoComplete="off" className="fair-input" inputMode="decimal" placeholder="Amount in $TICS" aria-label="Withdraw amount in $TICS" value={amount}
           onChange={(e) => setAmount(e.target.value)} data-testid="withdraw-amount" />
@@ -139,7 +149,7 @@ function Withdraw({ profile, wallet, onDone }) {
       </dl>
       <p className="fair-note" data-testid="withdraw-min">Smallest withdrawal: {fmtMoney(min || 0)}</p>
       {problem && <p className="fair-note wallet-bad">{problem}</p>}
-      <button type="button" className="fair-btn fair-btn-wide" disabled={!units || !!problem || busy} onClick={review} data-testid="withdraw-send">Withdraw</button>
+      <button type="button" className="fair-btn fair-btn-wide" disabled={!units || !!problem || busy || !!waitText} onClick={review} data-testid="withdraw-send">Withdraw</button>
       {message && <p className={`wallet-status ${message.ok ? 'wallet-ok' : 'wallet-bad'}`} data-testid="withdraw-message">{message.text}</p>}
     </>}
   </section>;

@@ -51,6 +51,7 @@ export function TermsPage() {
     <p>Blockchain transfers cannot be reversed. Check the amount and the address before you send anything.</p>
     <p>Only the official $TICS token on Ethereum is accepted, contract <code>{TICS_CONTRACT}</code>. Anything else sent to the casino wallet, any other token or any other network, is not credited and cannot be returned.</p>
     <p>Withdrawals go only to the wallet that made a deposit. Any network fee for a withdrawal is shown before you confirm, and minimum amounts apply. You are responsible for your wallet, its keys and anything signed with it.</p>
+    <p data-testid="terms-topup-final">A top up is credited after a few blocks, so you can play with it straight away. Ethereum takes about 15 minutes to confirm a transfer for good. Until your latest top up is confirmed, you cannot withdraw. This includes any winnings made in that time. If a top up is not confirmed, for example because the transfer is no longer on Ethereum, it is taken back from your balance, your account is paused and we will contact you.</p>
     <p>Payouts are automatic, but they can take time and can be held for safety checks, for example when a transfer looks unusual or the network is busy. Your balance stays in your account while that happens.</p>
 
     <h2>7. Errors and abuse</h2>
