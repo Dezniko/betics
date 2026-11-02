@@ -42,8 +42,10 @@ What the code makes sure of, and what it cannot:
   player's new balance is in the central records. Every accepted bet fits what the wallet holds.
 - A top up is credited after a few blocks so it can be played straight away, but it can only be withdrawn
   once Ethereum has made its block final (about 15 minutes). If a credited transfer ever disappears from
-  the chain, the credit is taken back with its own ledger entry and the account is paused for review.
-- A credit must match a recorded on-chain deposit for that player, and the payout signer only pays money that
+  the chain (and a second, independent provider agrees), the credit is taken back with its own ledger entry
+  and the account is paused for review. Without that second confirmation nothing is taken back
+  automatically: the account is paused and the money stays not withdrawable until an owner has checked it.
+- A $TICS credit must match a recorded on-chain deposit for that player, and the payout signer only pays money that
   is held in the player's own wallet record, to the wallet that deposited.
 - These are software rules on Cloudflare, not on-chain guarantees. Anyone with deploy access to the Cloudflare
   account (the operator) could change any of them. That access is protected separately (strong login, two

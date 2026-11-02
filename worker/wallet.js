@@ -248,10 +248,14 @@ export async function releaseSpinExposure(db, id) {
 // is in the central copy) -> release. 'pending' -> keep counting it, and alert once it is 10 minutes old.
 export async function sweepSpinHolds(env, now = Date.now()) {
   const db = env.DB, out = { checked: 0, released: 0, kept: 0 };
-  const { results = [] } = await db.prepare('SELECT id, player_id, units, booked_at FROM spin_holds WHERE booked_at IS NOT NULL AND booked_at < ? ORDER BY booked_at LIMIT 25')
+  // Longest-unchecked first, so bookings that stay open (a copy that keeps failing) never hide newer ones.
+  const { results = [] } = await db.prepare('SELECT id, player_id, units, booked_at FROM spin_holds WHERE booked_at IS NOT NULL AND booked_at < ? ORDER BY COALESCE(checked_at, 0), booked_at LIMIT 25')
     .bind(now - HOLD_CHECK_AFTER_MS).all();
+  const started = Date.now();
   for (const h of results) {
+    if (Date.now() - started > 20_000) break; // the rest next minute
     out.checked++;
+    await db.prepare('UPDATE spin_holds SET checked_at = ? WHERE id = ?').bind(now, h.id).run();
     const state = await walletOp(env, h.player_id, 'hold-status', { holdId: h.id }).then((r) => r.state, (e) => { console.error('hold check failed', h.id, e?.message || e); return null; });
     if (state === 'void' || state === 'flushed') { await releaseSpinExposure(db, h.id); out.released++; continue; }
     out.kept++;
@@ -348,9 +352,9 @@ export async function recordTransfer(env, settings, t) {
   const player = house ? null : await db.prepare('SELECT id FROM players WHERE wallet_address = ?').bind(t.from).first();
   const status = house ? 'ignored' : units < settings.minDepositUnits ? 'below_min' : player ? 'credited' : 'unmatched';
   // Ignored on a clash with the id OR with the same transfer recorded before a reorg under another log index.
-  await db.prepare(`INSERT OR IGNORE INTO chain_deposits (id, chain_id, tx_hash, log_index, block_number, from_address, to_address, amount_wei, amount_units, player_id, status, note, tx_ordinal)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, settings.chainId, t.txHash, t.logIndex, t.blockNumber, t.from, t.to, t.amountWei, units,
-    status === 'credited' ? player.id : null, status, house ? 'house wallet top up' : null, ordinal).run();
+  await db.prepare(`INSERT OR IGNORE INTO chain_deposits (id, chain_id, tx_hash, log_index, block_number, from_address, to_address, amount_wei, amount_units, player_id, status, note, tx_ordinal, token)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, settings.chainId, t.txHash, t.logIndex, t.blockNumber, t.from, t.to, t.amountWei, units,
+    status === 'credited' ? player.id : null, status, house ? 'house wallet top up' : null, ordinal, settings.token).run();
   let row = await db.prepare('SELECT * FROM chain_deposits WHERE id = ?').bind(id).first();
   if (!row) {
     // The same transfer is already recorded under its old log index: it is never recorded or credited twice.
@@ -511,7 +515,6 @@ export async function chainTick(env, deps = {}) {
   ]).catch(() => {});
   // Before anything that needs the blockchain node, so an RPC outage does not stop it.
   await settleHoldingRows(env).catch((e) => console.error('holding sweep failed', e));
-  await sweepSpinHolds(env).catch((e) => console.error('spin booking sweep failed', e));
   const settings = await ticsSettings(env.DB);
   if (!settings.casinoWallet) return { skipped: 'no casino wallet' };
   const rpc = deps.rpc || rpcClient(rpcUrl(env, settings.chainId), deps.fetch, { fallbackUrl: env.ETH_RPC_URL_2 || null });
@@ -519,12 +522,14 @@ export async function chainTick(env, deps = {}) {
   // A failing deposit scan must not stop the casino wallet snapshot: spins rely on it being fresh.
   let scanError = null;
   const scan = await scanDeposits(env, settings, rpc).catch((e) => { scanError = e; return null; });
-  const finality = await finalizeDeposits(env, settings, rpc, { rpc2: env.ETH_RPC_URL_2 ? rpcClient(env.ETH_RPC_URL_2, deps.fetch) : (deps.rpc2 || null) })
+  const finality = await finalizeDeposits(env, settings, rpc, { rpc2: deps.rpc2 || (env.ETH_RPC_URL_2 ? rpcClient(env.ETH_RPC_URL_2, deps.fetch) : null), rpc2Url: env.ETH_RPC_URL_2 || null })
     .catch((e) => { console.error('deposit finality check failed', e); return null; });
   const snapshot = await refreshFloat(env, await ticsSettings(env.DB), rpc);
   await pruneSpinHolds(env.DB);
   const gas = await refreshGas(env.DB, rpc).catch((e) => { console.error('gas refresh failed', e); return null; });
   const prices = await refreshPrices(env, settings, deps.fetch || fetch).catch((e) => { console.error('price refresh failed', e); return null; });
+  // Last, with a time budget, so slow wallet checks never delay the deposit scan or the wallet snapshot.
+  await sweepSpinHolds(env).catch((e) => console.error('spin booking sweep failed', e));
   if (scanError) throw scanError; // still reported by the cron after everything else ran
   return { scan, finality, snapshot, gas, prices };
 }
@@ -592,65 +597,94 @@ export async function withdrawalFee(db, settings, now = Date.now()) {
 
 // ---------- deposit finality (re-audit R2) ----------
 // A deposit is credited after a few blocks so the player can play at once, but a few blocks are not
-// final. Once Ethereum finalizes its block (about 13 to 15 minutes), the cron fetches the transaction again.
-// Found with the same transfer: finalized (withdrawals may use it). Not found after its block is final,
-// twice at least 5 minutes apart (and not found by the second provider either, when one is set): the
-// transfer is gone, so the credit is taken back with its own ledger entry, the account is paused and an
-// owner gets a critical alert. Nothing in the ledger is deleted.
+// final. The player's wallet keeps every credited top up as 'not final' (it cannot be withdrawn) until
+// the cron has seen its transfer again in a block Ethereum has finalized (about 13 to 15 minutes).
+// If the transfer is not there any more, twice at least 5 minutes apart:
+//  - a second, independent provider (ETH_RPC_URL_2, not the one this run uses) must not see it either;
+//    then the credit is taken back with its own ledger entry, the account is paused, owners get a
+//    critical alert. Nothing in the ledger is deleted.
+//  - without such a provider nothing is taken back automatically: the account is paused and owners get
+//    a critical alert to review it (review_at). The money stays not withdrawable while it is open.
+// The longest-unchecked rows are checked first (final_checked_at), so rows that stay open never block
+// newer deposits, and one failing row never stops the others.
 export const FINAL_MISS_CONFIRM_MS = 5 * 60_000;
+const FINAL_STUCK_MS = 60 * 60_000;
 export async function unfinalUnits(db, playerId) {
   return (await db.prepare(`SELECT COALESCE(SUM(amount_units), 0) AS n FROM chain_deposits
-    WHERE finalized_at IS NULL AND player_id = ? AND status IN ('credited', 'assigned') AND reversed_at IS NULL`).bind(playerId).first())?.n || 0;
+    WHERE finalized_at IS NULL AND reversed_at IS NULL AND player_id = ? AND status IN ('credited', 'assigned')`).bind(playerId).first())?.n || 0;
 }
+const depositRef = (row) => `td:${row.chain_id}-${row.tx_hash}-${row.log_index}`;
 const transferStillThere = (receipt, row, settings, finalized) => !!receipt && receipt.status === '0x1' && hexToNumber(receipt.blockNumber) <= finalized
-  && withOrdinals(decodeTransfers(receipt.logs.map((l) => ({ ...l, blockNumber: receipt.blockNumber, transactionHash: receipt.transactionHash })), settings.token, row.to_address))
+  && withOrdinals(decodeTransfers(receipt.logs.map((l) => ({ ...l, blockNumber: receipt.blockNumber, transactionHash: receipt.transactionHash })), row.token || settings.token, row.to_address))
     .some((t) => t.from === row.from_address && t.amountWei === row.amount_wei && t.ordinal === (row.tx_ordinal ?? 0));
-export async function finalizeDeposits(env, settings, rpc, { rpc2 = null, now = Date.now() } = {}) {
-  const db = env.DB, out = { checked: 0, finalized: 0, missing: 0, reversed: 0 };
-  const { results = [] } = await db.prepare('SELECT * FROM chain_deposits WHERE finalized_at IS NULL ORDER BY block_number LIMIT 20').all();
+export async function finalizeDeposits(env, settings, rpc, { rpc2 = null, rpc2Url = null, now = Date.now() } = {}) {
+  const db = env.DB, out = { checked: 0, finalized: 0, missing: 0, reviewed: 0, reversed: 0 };
+  const { results = [] } = await db.prepare('SELECT * FROM chain_deposits WHERE finalized_at IS NULL AND reversed_at IS NULL ORDER BY COALESCE(final_checked_at, 0), block_number LIMIT 20').all();
   if (!results.length) return out;
   const fin = await rpc('eth_getBlockByNumber', ['finalized', false]);
   const finalized = fin?.number ? hexToNumber(fin.number) : NaN;
   if (!Number.isSafeInteger(finalized)) return out;
+  // The second provider only counts as independent if this run is not already using it.
+  const independent = rpc2 && !(rpc2Url && typeof rpc.provider === 'function' && rpc.provider() === rpc2Url) ? rpc2 : null;
   for (const row of results) {
-    if (row.block_number > finalized) continue; // not final yet
-    out.checked++;
-    const receipt = await rpc('eth_getTransactionReceipt', [row.tx_hash]);
-    // Moved into a newer block by a reorg: wait until that one is final.
-    if (receipt && receipt.status === '0x1' && hexToNumber(receipt.blockNumber) > finalized) continue;
-    if (transferStillThere(receipt, row, settings, finalized)) {
-      await db.prepare("UPDATE chain_deposits SET finalized_at = datetime('now'), final_miss_at = NULL WHERE id = ? AND finalized_at IS NULL").bind(row.id).run();
-      out.finalized++; continue;
-    }
-    out.missing++;
-    if (!row.final_miss_at) { await db.prepare('UPDATE chain_deposits SET final_miss_at = ? WHERE id = ? AND final_miss_at IS NULL').bind(now, row.id).run(); continue; }
-    if (now - row.final_miss_at < FINAL_MISS_CONFIRM_MS) continue;
-    if (rpc2) {
-      // A second, independent provider must not see it either.
-      const other = await rpc2('eth_getTransactionReceipt', [row.tx_hash]).catch(() => undefined);
-      if (other === undefined) continue; // unknown: ask again next run
-      if (other) { await db.prepare('UPDATE chain_deposits SET final_miss_at = NULL WHERE id = ?').bind(row.id).run(); continue; }
-    }
-    await reverseDeposit(env, row);
-    out.reversed++;
+    try {
+      await db.prepare('UPDATE chain_deposits SET final_checked_at = ? WHERE id = ?').bind(now, row.id).run();
+      if (row.block_number > finalized) continue; // not final yet
+      out.checked++;
+      const receipt = await rpc('eth_getTransactionReceipt', [row.tx_hash]);
+      // Moved into a newer block by a reorg: wait until that one is final.
+      if (receipt && receipt.status === '0x1' && hexToNumber(receipt.blockNumber) > finalized) continue;
+      let there = transferStillThere(receipt, row, settings, finalized);
+      if (!there && independent) {
+        const other = await independent('eth_getTransactionReceipt', [row.tx_hash]).catch(() => undefined);
+        if (other === undefined) continue; // unknown: ask again next run
+        if (transferStillThere(other, row, settings, finalized)) there = true; // our provider is wrong, the chain has it
+      }
+      if (there) { await markFinal(env, row); out.finalized++; continue; }
+      out.missing++;
+      if (!row.final_miss_at) { await db.prepare('UPDATE chain_deposits SET final_miss_at = ? WHERE id = ? AND final_miss_at IS NULL').bind(now, row.id).run(); continue; }
+      if (now - row.final_miss_at < FINAL_MISS_CONFIRM_MS) continue;
+      if (independent) { await reverseDeposit(env, row.id); out.reversed++; continue; }
+      if (!row.review_at) { await flagDeposit(env, row); out.reviewed++; }
+      else if (now - row.final_miss_at > FINAL_STUCK_MS) await raise(db, { type: 'tics_deposit_open', severity: 'warning', key: `tics_deposit_open:${row.id}`, playerId: row.player_id || null,
+        title: 'A deposit is still not found on Ethereum after an hour', details: `${row.tx_hash}: still missing. Set a second provider (ETH_RPC_URL_2) on the game Worker so it can be settled, or check it on Etherscan.` }).run();
+    } catch (e) { console.error('deposit finality check failed for', row.id, e?.message || e); }
   }
   return out;
 }
-async function reverseDeposit(env, row) {
+async function markFinal(env, row) {
+  // The wallet must know first: only then may its money be withdrawn.
+  if (row.player_id && ['credited', 'assigned'].includes(row.status)) await walletOp(env, row.player_id, 'tics-deposit-final', { ref: depositRef(row) });
+  await env.DB.prepare("UPDATE chain_deposits SET finalized_at = datetime('now'), final_miss_at = NULL WHERE id = ? AND finalized_at IS NULL").bind(row.id).run();
+  if (row.review_at) await raise(env.DB, { type: 'tics_deposit_found', severity: 'info', key: `tics_deposit_found:${row.id}`, playerId: row.player_id || null,
+    title: 'A deposit under review was found on Ethereum', details: `${row.tx_hash} is in a final block after all. It is final now. The account ${row.player_id || ''} stays paused until an owner resumes it.` }).run();
+}
+async function flagDeposit(env, row) {
   const db = env.DB;
-  const credited = ['credited', 'assigned'].includes(row.status) && row.player_id && row.credited_at;
-  let result = { reversedCents: 0, shortCents: 0 };
-  if (credited) {
-    result = await walletOp(env, row.player_id, 'tics-deposit-reverse', { ref: `td:${row.chain_id}-${row.tx_hash}-${row.log_index}`, amountCents: row.amount_units });
-    await db.prepare("UPDATE players SET status = 'frozen' WHERE id = ? AND status = 'active'").bind(row.player_id).run();
-  }
+  const claimed = await db.prepare("UPDATE chain_deposits SET review_at = datetime('now') WHERE id = ? AND review_at IS NULL").bind(row.id).run();
+  if ((claimed.meta?.changes ?? 0) !== 1) return;
+  if (row.player_id) await db.prepare("UPDATE players SET status = 'frozen' WHERE id = ? AND status = 'active'").bind(row.player_id).run();
+  await raise(db, { type: 'tics_deposit_gone', severity: row.player_id ? 'critical' : 'warning', key: `tics_deposit_review:${row.id}`, playerId: row.player_id || null,
+    title: `A deposit could not be found on Ethereum: ${formatTics(row.amount_units)}`,
+    details: `${row.tx_hash} from ${row.from_address} was not found although its block is final. No second provider confirmed it, so nothing was taken back.${row.player_id ? ` The account ${row.player_id} is paused and this money cannot be withdrawn. Check the transaction on Etherscan.` : ''}` }).run();
+}
+async function reverseDeposit(env, id) {
+  const db = env.DB;
+  const row = await db.prepare('SELECT * FROM chain_deposits WHERE id = ?').bind(id).first(); // fresh: an admin may have just assigned it
+  if (!row || row.reversed_at) return;
+  let result = { reversedCents: 0, shortCents: 0, duplicate: true };
+  // Always ask the wallet when a player is linked: it knows whether it credited this ref (and closes it if not).
+  if (row.player_id) result = await walletOp(env, row.player_id, 'tics-deposit-reverse', { ref: depositRef(row), amountCents: row.amount_units });
+  const taken = result.reversedCents > 0 || result.shortCents > 0;
+  if (row.player_id && taken) await db.prepare("UPDATE players SET status = 'frozen' WHERE id = ? AND status = 'active'").bind(row.player_id).run();
   await db.prepare("UPDATE chain_deposits SET reversed_at = datetime('now'), note = ? WHERE id = ? AND reversed_at IS NULL")
-    .bind(`gone from the chain after its block was final${credited ? `; ${formatTics(result.reversedCents)} taken back` : ''}`.slice(0, 200), row.id).run();
-  await raise(db, { type: 'tics_deposit_gone', severity: credited ? 'critical' : 'warning', key: `tics_deposit_gone:${row.id}`, playerId: row.player_id || null,
+    .bind(`gone from the chain after its block was final${taken ? `; ${formatTics(result.reversedCents)} taken back` : ''}`.slice(0, 200), row.id).run();
+  if (result.duplicate && row.player_id) return;
+  await raise(db, { type: 'tics_deposit_gone', severity: taken ? 'critical' : 'warning', key: `tics_deposit_gone:${row.id}`, playerId: row.player_id || null,
     title: `A deposit disappeared from the chain: ${formatTics(row.amount_units)}`,
-    details: `${row.tx_hash} from ${row.from_address} is not on Ethereum any more although its block was final. ${credited
+    details: `${row.tx_hash} from ${row.from_address} is not on Ethereum any more although its block was final (two providers agree). ${taken
       ? `The credit was taken back (${formatTics(result.reversedCents)}${result.shortCents > 0 ? `; ${formatTics(result.shortCents)} could not be taken back because it was already played or withdrawn` : ''}) and the account ${row.player_id} is paused. Check the transaction on Etherscan before resuming it.`
-      : 'It was never credited, and it can no longer be assigned.'}` }).run();
+      : 'It was never credited, and it can no longer be credited or assigned.'}` }).run();
 }
 
 // ---------- withdrawals ----------
@@ -677,8 +711,7 @@ export async function requestWithdrawal(env, player, body, settings, now = Date.
   if (amount <= fee) fail(400, `The amount must be more than the network fee of ${formatTics(fee)}.`);
   const ref = `th:${id}`;
   // Re-audit R2: money from a top up whose block Ethereum has not finalized yet can be played but not
-  // withdrawn. The wallet keeps that much back when it sets the withdrawal aside.
-  const keep = await unfinalUnits(db, player.id);
+  // withdrawn. The player's wallet keeps its own list of such credits and holds that much back.
   const release = new Date(now + Math.max(0, settings.coolingSeconds) * 1000).toISOString().slice(0, 19).replace('T', ' ');
   // 1. Claim the request id first. Only the call whose insert lands goes on to set money aside, so a
   //    request sent several times at once can never hold (or release) the same money twice.
@@ -694,7 +727,7 @@ export async function requestWithdrawal(env, player, body, settings, now = Date.
   // 2. Set the money aside. A clear refusal (not enough balance, balance check) removes the claim.
   let held;
   try {
-    held = await walletOp(env, player.id, 'tics-hold', { ref, amountCents: amount, keepCents: keep });
+    held = await walletOp(env, player.id, 'tics-hold', { ref, amountCents: amount });
   } catch (error) {
     if (error?.status && error.status < 500) {
       await db.prepare("DELETE FROM chain_withdrawals WHERE id = ? AND status = 'holding'").bind(id).run();

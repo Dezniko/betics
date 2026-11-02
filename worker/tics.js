@@ -92,7 +92,7 @@ export function rpcClient(url, fetchImpl = fetch, { fallbackUrl = null, timeoutM
     if (body.error) { const e = new Error(`RPC ${method}: ${body.error.message || 'error'}`); e.rpc = body.error; throw e; }
     return body.result;
   };
-  return async function rpc(method, params = []) {
+  const rpc = async function rpc(method, params = []) {
     if (active) return call(active, method, params);
     try { const result = await call(url, method, params); active = url; return result; } catch (error) {
       if (!fallbackUrl || !url || !error.outage) throw error;
@@ -101,6 +101,8 @@ export function rpcClient(url, fetchImpl = fetch, { fallbackUrl = null, timeoutM
       return result;
     }
   };
+  rpc.provider = () => active; // which URL this client settled on (null before its first answer)
+  return rpc;
 }
 export function rpcUrl(env, chainId) {
   if (env.ETH_RPC_URL) return env.ETH_RPC_URL;

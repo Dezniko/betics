@@ -92,7 +92,7 @@ async function setup() {
     const address = privateKeyToAccount(generatePrivateKey()).address.toLowerCase();
     DB.raw.prepare("INSERT INTO players (id, wallet_address) VALUES (?, ?)").run(address, address);
     const tx = `0x${randomBytes(32).toString('hex')}`;
-    DB.raw.prepare("INSERT INTO chain_deposits (id, chain_id, tx_hash, log_index, block_number, from_address, to_address, amount_wei, amount_units, player_id, status, credited_at, tx_ordinal) VALUES (?, 1, ?, 0, 1, ?, ?, '1', ?, ?, 'credited', datetime('now'), 0)").run(`1:${tx}:0`, tx, address, casino, units, address);
+    DB.raw.prepare("INSERT INTO chain_deposits (id, chain_id, tx_hash, log_index, block_number, from_address, to_address, amount_wei, amount_units, player_id, status, credited_at, tx_ordinal, finalized_at) VALUES (?, 1, ?, 0, 1, ?, ?, '1', ?, ?, 'credited', datetime('now'), 0, datetime('now'))").run(`1:${tx}:0`, tx, address, casino, units, address);
     await env.CASINO.get(address).fetch(new Request('https://wallet/internal/tics-deposit', { method: 'POST', headers: { 'X-Internal-Secret': 's3cret' }, body: JSON.stringify({ ref: `td:1-${tx}-0`, amountCents: units, playerId: address }) }));
     return address;
   };

@@ -1290,15 +1290,9 @@ test('R2 a credited top up that disappears from the chain is taken back, the acc
     let out = await finalizeDeposits(p.env, settings, p.chain.rpc, { now: t0 });
     assert.equal(out.missing, 1); assert.equal(out.reversed, 0);
     assert.equal(await realOf(p, a.cookie), bal);
-    // A second provider that still sees it stops the reversal.
-    const seen = async (m, prm) => (m === 'eth_getTransactionReceipt' ? { status: '0x1' } : p.chain.rpc(m, prm));
-    out = await finalizeDeposits(p.env, settings, p.chain.rpc, { rpc2: seen, now: t0 + FINAL_MISS_CONFIRM_MS + 1000 });
-    assert.equal(out.reversed, 0);
-    assert.equal(await realOf(p, a.cookie), bal);
-    // Two misses minutes apart, and the second provider agrees: the credit is taken back.
+    // Two misses minutes apart, and an independent second provider agrees: the credit is taken back.
     const gone = async (m, prm) => (m === 'eth_getTransactionReceipt' ? null : p.chain.rpc(m, prm));
-    await finalizeDeposits(p.env, settings, p.chain.rpc, { rpc2: gone, now: t0 + 2 * FINAL_MISS_CONFIRM_MS });
-    out = await finalizeDeposits(p.env, settings, p.chain.rpc, { rpc2: gone, now: t0 + 4 * FINAL_MISS_CONFIRM_MS });
+    out = await finalizeDeposits(p.env, settings, p.chain.rpc, { rpc2: gone, now: t0 + 2 * FINAL_MISS_CONFIRM_MS });
     assert.equal(out.reversed, 1);
     const take = Math.min(bal, dep.amount_units);
     assert.equal(await realOf(p, a.cookie), bal - take, 'the deposit amount is taken back, never below zero');
@@ -1326,6 +1320,8 @@ test('R2 reversal never takes the balance below zero: the part already gone is r
   const obj = new DemoCasino({ storage: doStorage() }, { DB, INTERNAL_SECRET: 's' });
   obj.setMeta('player_id', 'p1'); obj.init({}, 1000);
   obj.ticsOp('tics-deposit', { ref: `td:1-0x${'11'.repeat(32)}-0`, amountCents: 500 });
+  assert.throws(() => obj.ticsOp('tics-hold', { ref: 'th:aaaaaaaa-0', amountCents: 400 }), /about 15 minutes/, 'not final yet');
+  obj.ticsOp('tics-deposit-final', { ref: `td:1-0x${'11'.repeat(32)}-0` });
   obj.ticsOp('tics-hold', { ref: 'th:aaaaaaaa-1', amountCents: 400 }); // most of it already withdrawn
   const r = obj.ticsOp('tics-deposit-reverse', { ref: `td:1-0x${'11'.repeat(32)}-0`, amountCents: 500 });
   assert.deepEqual([r.reversedCents, r.shortCents, obj.ticsBalance()], [100, 400, 0]);
@@ -1336,4 +1332,89 @@ test('R2 reversal never takes the balance below zero: the part already gone is r
   assert.equal(obj.ticsOp('tics-deposit-reverse', { ref: ref2, amountCents: 300 }).reversedCents, 0);
   assert.equal(obj.ticsOp('tics-deposit', { ref: ref2, amountCents: 300 }).duplicate, true);
   assert.equal(obj.ticsBalance(), 0);
+});
+
+test('R2 review fixes: second provider can confirm a deposit, no second provider means review only, nothing repeats, open rows never block new ones', async () => {
+  const p = platform();
+  try {
+    p.chain.finalized = 980;
+    const a = await funded(p, 5000n);
+    const [dep] = p.rows('SELECT * FROM chain_deposits WHERE player_id = ?', a.address);
+    const receipt = p.chain.receipts.get(dep.tx_hash);
+    p.chain.receipts.delete(dep.tx_hash);
+    p.chain.finalized = 1000;
+    const settings = JSON.parse(p.rows("SELECT value FROM settings WHERE key = 'tics_payments'")[0].value);
+    const t0 = Date.now();
+    // Our provider lost it but an independent one has it in a final block: it is final, nothing taken.
+    const has = async (m, prm) => (m === 'eth_getTransactionReceipt' ? receipt : p.chain.rpc(m, prm));
+    let out = await finalizeDeposits(p.env, settings, p.chain.rpc, { rpc2: has, now: t0 });
+    assert.equal(out.finalized, 1);
+    assert.ok(p.rows('SELECT finalized_at FROM chain_deposits WHERE id = ?', dep.id)[0].finalized_at);
+    assert.equal((await a.wd(100_000)).status, 200, 'withdrawable');
+
+    // A second player's deposit goes missing and there is NO independent provider: review, nothing taken back.
+    const b = await (async () => { const x = await p.login(); const addr = x.account.address.toLowerCase(); await p.call('/api/session', { cookie: x.cookie, body: {} });
+      p.chain.block = 1030; p.chain.transfer({ from: addr, wei: 3000n * 10n ** 18n, block: 1012 }); p.chain.finalized = 1000; for (let i = 0; i < 3; i++) await chainTick(p.env, { rpc: p.chain.rpc }); return { ...x, address: addr }; })();
+    const [depB] = p.rows('SELECT * FROM chain_deposits WHERE player_id = ?', b.address);
+    assert.equal(await realOf(p, b.cookie), 300_000);
+    p.chain.receipts.delete(depB.tx_hash);
+    p.chain.finalized = 1020;
+    await finalizeDeposits(p.env, settings, p.chain.rpc, { now: t0 });
+    out = await finalizeDeposits(p.env, settings, p.chain.rpc, { now: t0 + 2 * FINAL_MISS_CONFIRM_MS });
+    assert.equal(out.reviewed, 1); assert.equal(out.reversed, 0);
+    assert.equal(await realOf(p, b.cookie), 300_000, 'nothing taken back without a second provider');
+    assert.equal(p.rows('SELECT status FROM players WHERE id = ?', b.address)[0].status, 'frozen');
+    assert.equal(p.rows("SELECT severity FROM alerts WHERE dedupe_key = ?", `tics_deposit_review:${depB.id}`)[0].severity, 'critical');
+    // An owner resumes the account after checking: later runs never freeze it again.
+    p.DB.raw.prepare("UPDATE players SET status = 'active' WHERE id = ?").run(b.address);
+    for (let i = 3; i < 6; i++) await finalizeDeposits(p.env, settings, p.chain.rpc, { now: t0 + i * FINAL_MISS_CONFIRM_MS });
+    assert.equal(p.rows('SELECT status FROM players WHERE id = ?', b.address)[0].status, 'active');
+    // The money under review still cannot be withdrawn.
+    assert.equal((await p.call('/api/wallet/withdraw', { cookie: b.cookie, body: { amountCents: 100_000, requestId: randomUUID() } })).status, 402);
+
+    // 25 rows that stay open (oldest blocks) never stop a new deposit from becoming final.
+    for (let i = 0; i < 25; i++) {
+      const tx = `0x${randomBytes(32).toString('hex')}`;
+      p.DB.raw.prepare("INSERT INTO chain_deposits (id, chain_id, tx_hash, log_index, block_number, from_address, to_address, amount_wei, amount_units, status, tx_ordinal) VALUES (?, 1, ?, 0, ?, ?, ?, '1', 1, 'unmatched', 0)")
+        .run(`1:${tx}:0`, tx, 10 + i, '0x' + '7'.repeat(40), CASINO);
+    }
+    p.chain.block = 1060; p.chain.finalized = 1050;
+    p.chain.transfer({ from: a.address, wei: 2000n * 10n ** 18n, block: 1035 });
+    for (let i = 0; i < 4; i++) await chainTick(p.env, { rpc: p.chain.rpc });
+    const fresh = p.rows('SELECT finalized_at FROM chain_deposits WHERE player_id = ? ORDER BY block_number DESC LIMIT 1', a.address)[0];
+    assert.ok(fresh.finalized_at, 'new deposit became final despite 25 open rows');
+  } finally { p.restore(); }
+});
+
+test('R1 review fix: a lost reply replays even when the table is full right now', async () => {
+  const p = platform();
+  try {
+    const a = await funded(p, 5000n, 100000n);
+    const c = (await p.call('/api/fairness/commitment', { cookie: a.cookie })).data;
+    const body = { bets: [{ type: 'red', amountCents: 10_000 }], requestId: randomUUID(), expectedCommitment: c, clientEntropy: randomBytes(32).toString('hex'), mode: 'real' };
+    const first = await p.call('/api/games/roulette/spin', { cookie: a.cookie, body });
+    assert.equal(first.status, 200);
+    // Someone else books the whole free float.
+    p.DB.raw.prepare("INSERT INTO spin_holds (id, player_id, units, expires_at, booked_at) VALUES ('big', 'x', 999999999999, ?, ?)").run(Date.now() + 1e9, Date.now());
+    const again = await p.call('/api/games/roulette/spin', { cookie: a.cookie, body });
+    assert.equal(again.status, 200, JSON.stringify(again.data));
+    assert.equal(again.data.roundId, first.data.roundId, 'the same spin, answered again');
+    const fresh = await p.spin(a.cookie, [{ type: 'red', amountCents: 10_000 }], 'real');
+    assert.equal(fresh.status, 503, 'a new spin is still refused');
+  } finally { p.restore(); }
+});
+
+test('R1 review fix: bookings that stay open do not hide newer ones from the cron', async () => {
+  const p = platform();
+  try {
+    const now = Date.now();
+    // 30 old bookings whose wallet keeps failing to answer.
+    for (let i = 0; i < 30; i++) p.DB.raw.prepare('INSERT INTO spin_holds (id, player_id, units, expires_at, booked_at) VALUES (?, ?, 1, ?, ?)').run(`old${i}`, `broken${i}`, now + 1e9, now - 3_600_000 + i);
+    const real = p.env.CASINO.get; p.env.CASINO.get = (id) => (String(id).startsWith('broken') ? { fetch: async () => { throw new Error('down'); } } : real(id));
+    p.DB.raw.prepare('INSERT INTO spin_holds (id, player_id, units, expires_at, booked_at) VALUES (?, ?, 1, ?, ?)').run('newer', 'nobody-here', now + 1e9, now - 10 * 60_000);
+    let released = false;
+    for (let i = 0; i < 3 && !released; i++) { await sweepSpinHolds(p.env, now + i * 60_000); released = !p.rows("SELECT 1 FROM spin_holds WHERE id = 'newer'").length; }
+    assert.ok(released, 'the newer booking was checked and released');
+    p.env.CASINO.get = real;
+  } finally { p.restore(); }
 });

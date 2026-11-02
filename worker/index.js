@@ -435,8 +435,10 @@ export default {
             if (worst <= live.maxWinUnits) {
               holdId = `${player.id}:${typeof spinBody.requestId === 'string' ? spinBody.requestId.slice(0, 40) : ''}:${crypto.randomUUID()}`;
               const booked = await reserveSpinExposure(env.DB, { id: holdId, playerId: player.id, units: Math.max(0, worst - stake) });
-              if (!booked) { holdId = null; fail(503, 'Several big bets are being played at this moment. Please try again in a few seconds.'); }
-              context.holdId = holdId; // the wallet records it with the spin, and its central copy releases it
+              // No room: the wallet may still answer a replay of a spin it already made (lost reply), but
+              // refuses a new one with the same message.
+              if (!booked) { holdId = null; context.replayOnly = true; }
+              else context.holdId = holdId; // the wallet records it with the spin, and its central copy releases it
             }
           }
         }
@@ -514,6 +516,8 @@ export class DemoCasino {
     this.sql.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
     // Spin bookings (D1 spin_holds) this wallet knows: 'pending' = the spin settled here, its balance is not in
     // the central copy yet; 'flushed' = it is; 'void' = asked about before the spin ever ran, so it never will.
+    // Credited top ups whose block Ethereum has not finalized yet (final = 0): played freely, never withdrawn.
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS tics_finality (ref TEXT PRIMARY KEY, units INTEGER NOT NULL DEFAULT 0, final INTEGER NOT NULL DEFAULT 0 CHECK (final IN (0, 1)))`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS spin_hold_marks (hold_id TEXT PRIMARY KEY, state TEXT NOT NULL CHECK (state IN ('pending', 'flushed', 'void')),
       created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
     // Real money is a separate balance; play money stays in users.balance_cents.
@@ -636,7 +640,7 @@ export class DemoCasino {
   //  tics-hold     take a withdrawal amount off the balance  ref th:<withdrawalId>
   //  tics-finalise the withdrawal was paid on-chain          ref = the hold ref
   //  tics-release  the withdrawal failed or was cancelled    ref = the hold ref (money goes back)
-  ticsOp(kind, body) {
+  ticsOp(kind, body, { final = false } = {}) {
     if (typeof body.ref !== 'string' || !/^t[dh]:[A-Za-z0-9-]{8,100}$/.test(body.ref)) fail(400, 'invalid payment ref');
     return this.ctx.storage.transactionSync(() => {
       if (kind === 'tics-deposit' || kind === 'tics-hold') {
@@ -646,19 +650,27 @@ export class DemoCasino {
         if (kind === 'tics-deposit') {
           if (!body.ref.startsWith('td:')) fail(400, 'invalid payment ref');
           this.setTics(current + body.amountCents, 'deposit', body.amountCents, { ref: body.ref, ...(body.note ? { note: String(body.note).slice(0, 200) } : {}) });
+          // Not withdrawable until the cron has seen it in a final block (unless it already has).
+          this.sql.exec('INSERT INTO tics_finality (ref, units, final) VALUES (?, ?, ?) ON CONFLICT(ref) DO UPDATE SET units = excluded.units, final = MAX(final, excluded.final)',
+            body.ref, body.amountCents, final ? 1 : 0);
         } else {
           if (!body.ref.startsWith('th:')) fail(400, 'invalid payment ref');
           // Never pay out from a balance that does not match its own ledger.
           if (!this.ticsReconciled()) fail(409, 'balance check failed');
           if (current < body.amountCents) fail(402, 'not enough real balance');
           // Money from a top up that Ethereum has not finalized yet stays here (re-audit R2).
-          const keep = Number.isSafeInteger(body.keepCents) && body.keepCents > 0 ? body.keepCents : 0;
+          const keep = this.one('SELECT COALESCE(SUM(units), 0) AS n FROM tics_finality WHERE final = 0').n;
           if (current - keep < body.amountCents) fail(402, `${formatTics(Math.min(keep, current))} from your latest top up can be withdrawn about 15 minutes after it arrived, once Ethereum has confirmed it for good. You can withdraw up to ${formatTics(Math.max(0, current - keep))} now.`);
           this.setTics(current - body.amountCents, 'withdrawal_hold', -body.amountCents, { ref: body.ref });
           this.sql.exec("INSERT INTO holds (ref, units, status) VALUES (?, ?, 'held')", body.ref, body.amountCents);
         }
         this.sql.exec('INSERT INTO processed_payments (ref) VALUES (?)', body.ref);
         return { duplicate: false, realTicsCents: this.ticsBalance() };
+      }
+      if (kind === 'tics-deposit-final') {
+        if (!body.ref.startsWith('td:')) fail(400, 'invalid payment ref');
+        this.sql.exec('INSERT INTO tics_finality (ref, final) VALUES (?, 1) ON CONFLICT(ref) DO UPDATE SET final = 1', body.ref);
+        return { ok: true };
       }
       if (kind === 'tics-deposit-reverse') {
         // A credited top up whose transfer is gone from the chain (re-audit R2). Takes back what the
@@ -676,6 +688,7 @@ export class DemoCasino {
         const current = this.ticsBalance(), take = Math.min(current, body.amountCents);
         if (take > 0) this.setTics(current - take, 'deposit_reversal', -take, { ref: body.ref, reason: 'transfer gone from the chain', shortCents: body.amountCents - take });
         this.sql.exec('INSERT INTO processed_payments (ref) VALUES (?)', rref);
+        this.sql.exec('INSERT INTO tics_finality (ref, units, final) VALUES (?, 0, 1) ON CONFLICT(ref) DO UPDATE SET units = 0, final = 1', body.ref);
         return { duplicate: false, reversedCents: take, shortCents: body.amountCents - take, realTicsCents: this.ticsBalance() };
       }
       const hold = this.one('SELECT * FROM holds WHERE ref = ?', body.ref);
@@ -724,15 +737,16 @@ export class DemoCasino {
   // game Worker) is then no longer enough to make money appear. Someone who can also write the deposits
   // table can still fake a row: that limit is part of a custodial design and is stated in the README.
   async depositEvidence(body) {
-    if (!this.env.DB) return; // unit tests of the object alone; production always has the database
+    if (!this.env.DB) return {}; // unit tests of the object alone; production always has the database
     const m = typeof body?.ref === 'string' && body.ref.match(/^td:(\d{1,12})-(0x[0-9a-f]{64})-(\d{1,9})$/);
     if (!m) fail(400, 'invalid payment ref');
-    if (this.one('SELECT ref FROM processed_payments WHERE ref = ?', body.ref)) return; // a repeat: answered as a duplicate
-    const row = await this.env.DB.prepare('SELECT amount_units, player_id, status, reversed_at FROM chain_deposits WHERE chain_id = ? AND tx_hash = ? AND log_index = ?')
+    if (this.one('SELECT ref FROM processed_payments WHERE ref = ?', body.ref)) return {}; // a repeat: answered as a duplicate
+    const row = await this.env.DB.prepare('SELECT amount_units, player_id, status, reversed_at, finalized_at FROM chain_deposits WHERE chain_id = ? AND tx_hash = ? AND log_index = ?')
       .bind(Number(m[1]), m[2], Number(m[3])).first();
     const playerId = this.getMeta('player_id') || body.playerId;
     if (!row || row.amount_units !== body.amountCents || !playerId || row.player_id !== playerId
       || !['credited', 'assigned'].includes(row.status) || row.reversed_at) fail(409, 'No recorded deposit matches this credit. Nothing was credited.');
+    return { final: !!row.finalized_at };
   }
   // Real-money movements. Each has a unique ref so a repeated call (webhook
   // retry, double click) never moves money twice.
@@ -822,6 +836,7 @@ export class DemoCasino {
           return JSON.parse(cached.response_json);
         }
       }
+      if (context.replayOnly) fail(503, 'Several big bets are being played at this moment. Please try again in a few seconds.');
       const holdId = typeof context.holdId === 'string' && context.holdId.length <= 200 ? context.holdId : null;
       if (holdId && this.one("SELECT 1 AS ok FROM spin_hold_marks WHERE hold_id = ? AND state = 'void'", holdId)) fail(409, 'This spin took too long to reach the table. Your bet was not taken. Please try again.');
       // The browser says which payout table it agreed to. If it changed since, refuse before anything is
@@ -916,6 +931,7 @@ export class DemoCasino {
         if (!secret || !sameSecret(request.headers.get(INTERNAL_HEADER), secret)) fail(404, 'demo endpoint not found');
         // A deposit can arrive for a wallet that has not opened its game wallet yet: create it.
         if (!this.user() && pathname === '/internal/tics-deposit' && typeof body?.playerId === 'string') { this.setMeta('player_id', body.playerId); this.init({}, Number.isSafeInteger(body.demoStartUnits) ? body.demoStartUnits : DEMO_START_UNITS); }
+        if (method === 'POST' && pathname === '/internal/tics-deposit-final' && !this.user()) return json(this.ticsOp('tics-deposit-final', body));
         if (method === 'POST' && pathname === '/internal/hold-status') {
           let r = this.holdStatus(body);
           if (r.state === 'pending') { await this.flush(); r = this.holdStatus(body); }
@@ -925,9 +941,9 @@ export class DemoCasino {
         if (method === 'GET' && pathname === '/internal/wallet') return json({ ...this.wallet(), realBalanceCents: this.realBalance(), playerId: this.getMeta('player_id'), ticsReconciled: this.ticsReconciled() });
         const op = pathname.match(/^\/internal\/(deposit|withdraw-hold|withdraw-release)$/);
         if (method === 'POST' && op) { const result = this.paymentOp(op[1], body); await this.flush(); return json(result); }
-        const tics = pathname.match(/^\/internal\/(tics-deposit|tics-deposit-reverse|tics-hold|tics-finalise|tics-release|tics-hold-check|tics-hold-void)$/);
-        if (method === 'POST' && tics && tics[1] === 'tics-deposit') await this.depositEvidence(body);
-        if (method === 'POST' && tics) { const result = this.ticsOp(tics[1], body); if (!tics[1].startsWith('tics-hold-')) await this.flush(); return json(result); }
+        const tics = pathname.match(/^\/internal\/(tics-deposit|tics-deposit-reverse|tics-deposit-final|tics-hold|tics-finalise|tics-release|tics-hold-check|tics-hold-void)$/);
+        const evidence = method === 'POST' && tics && tics[1] === 'tics-deposit' ? await this.depositEvidence(body) : {};
+        if (method === 'POST' && tics) { const result = this.ticsOp(tics[1], body, evidence); if (!tics[1].startsWith('tics-hold-')) await this.flush(); return json(result); }
         fail(404, 'demo endpoint not found');
       }
       // Only the platform Worker can reach this object, and it always overwrites this header.
