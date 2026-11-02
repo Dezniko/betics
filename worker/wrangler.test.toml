@@ -1,0 +1,16 @@
+# Local-only integration harness; parent owns root deployment config.
+name = "casino-demo-worker-integration"
+main = "index.js"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+[durable_objects]
+bindings = [{ name = "CASINO", class_name = "DemoCasino" }]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DemoCasino"]
+
+[dev]
+ip = "127.0.0.1"
+port = 8791

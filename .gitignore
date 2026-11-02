@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.wrangler/
+.env
+.env.*
+.dev.vars
+.dev.vars.*
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.log
+.DS_Store
+coverage/
+!frontend/.env.production
+!.dev.vars.example

@@ -1,0 +1,6 @@
+# Local development only. Copy to .dev.vars (never committed) and use your own random values,
+# for example: openssl rand -hex 32
+INTERNAL_SECRET=
+IP_SALT=
+# Optional: a local test chain (node scripts/fake-chain.mjs 8545)
+# ETH_RPC_URL=http://127.0.0.1:8545

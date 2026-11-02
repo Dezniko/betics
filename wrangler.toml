@@ -1,0 +1,47 @@
+name = "betics"
+main = "worker/index.js"
+account_id = "046a96b420dcb9935276d06833941737"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+preview_urls = false
+routes = [
+  { pattern = "betics.io", custom_domain = true },
+  { pattern = "www.betics.io", custom_domain = true }
+]
+
+[assets]
+directory = "./frontend/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/*"]
+
+[durable_objects]
+bindings = [{ name = "CASINO", class_name = "DemoCasino" }]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DemoCasino"]
+
+# Deposit watcher and casino wallet snapshot, every minute.
+[triggers]
+crons = ["* * * * *"]
+
+# Nudges the payouts Worker when a withdrawal has no cooling delay.
+[[services]]
+binding = "PAYOUTS"
+service = "betics-payouts"
+
+[observability]
+enabled = true
+head_sampling_rate = 0.1
+
+[vars]
+STAGING = "true"
+PUBLIC_HOST = "betics.io"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "betics-db"
+database_id = "3f28043c-59c0-4f56-afbc-ae2a9a35305a"
+migrations_dir = "migrations"

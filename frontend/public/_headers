@@ -1,0 +1,19 @@
+# Content-Security-Policy must stay identical to the CSP const in worker/index.js (a test checks it).
+# connect-src allows https:/wss: and img-src allows https: on purpose: the wallet libraries
+# (WalletConnect relay, Reown, Coinbase, the wallet's own RPC) connect to endpoints and load
+# wallet logos from hosts that are not known in advance. Scripts stay 'self' only.
+/*
+  X-Robots-Tag: noindex, nofollow, noarchive, nosnippet
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: same-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  X-Frame-Options: DENY
+  Cross-Origin-Opener-Policy: same-origin-allow-popups
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data: https://fonts.reown.com; connect-src 'self' https: wss:; frame-src https://verify.walletconnect.org https://verify.walletconnect.com https://secure.walletconnect.org https://secure.walletconnect.com https://keys.coinbase.com; media-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+
+/index.html
+  Cache-Control: no-cache
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

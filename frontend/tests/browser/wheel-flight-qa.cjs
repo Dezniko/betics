@@ -1,0 +1,20 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const {open,sleep,OUT}=require('./mobile-controls-qa.cjs');
+(async()=>{
+ const {pocketAngle,REST_OFFSET}=await import('../../src/wheelMotion.js'),x=await open(874,298),frames=[];
+ x.ws.addEventListener('message',event=>{const m=JSON.parse(event.data);if(m.method==='Page.screencastFrame'){frames.push({time:Date.now(),data:m.params.data});x.send('Page.screencastFrameAck',{sessionId:m.params.sessionId})}});
+ await x.send('Emulation.setCPUThrottlingRate',{rate:4});
+ await x.ev(`(()=>{window.qaLiveWheel=document.querySelector('[data-testid="roulette-wheel"]');window.qaRotorAnimation=qaLiveWheel.querySelector('[data-testid="wheel-rotor"]').getAnimations()[0];window.qaLandings=0;let previous=qaLiveWheel.dataset.phase;new MutationObserver(()=>{const next=qaLiveWheel.dataset.phase;if(previous==='rolling'&&next==='resting')qaLandings++;previous=next}).observe(qaLiveWheel,{attributes:true});document.querySelector('button[title="Straight: 17"]').click()})()`);
+ await x.tap('button[title="Spin (Space)"]');
+ for(let i=0;i<100;i++){await sleep(50);if(await x.ev(`qaLiveWheel.dataset.phase==='rolling'`))break}
+ assert.equal(await x.ev('qaLiveWheel.dataset.phase'),'rolling');
+ const remaining=await x.ev(`(()=>{const a=qaLiveWheel.querySelector('[data-testid="roulette-ball"]').getAnimations()[0];return a.effect.getTiming().duration-a.currentTime})()`);
+ await sleep(Math.max(0,remaining-250));await x.send('Page.startScreencast',{format:'jpeg',quality:60,maxWidth:874,maxHeight:298,everyNthFrame:1});
+ const start=Date.now();await x.ev(`(()=>{const end=performance.now()+500;while(performance.now()<end){}return true})()`);const end=Date.now();await sleep(250);await x.send('Page.stopScreencast');
+ const result=await x.ev(`(()=>{const ball=qaLiveWheel.querySelector('[data-testid="roulette-ball"]'),angle=Number(ball.style.transform.match(/rotate[(]([-0-9.]+)deg[)]/)[1])-90;return{angle,relative:Number(qaLiveWheel.dataset.ballRelative),radius:Number(qaLiveWheel.dataset.ballRadius),phase:qaLiveWheel.dataset.phase,pocket:Number(document.querySelector('[data-testid="pocket-closeup"]')?.dataset.pocket),landings:qaLandings,carriers:qaLiveWheel.getAnimations({subtree:true}).filter(a=>a.effect.getTiming().iterations===Infinity).length,sameRotation:qaRotorAnimation===qaLiveWheel.querySelector('[data-testid="wheel-rotor"]').getAnimations()[0]}})()`);
+ const during=frames.filter(f=>f.time>start+50&&f.time<end-25);result.framesDuringCaptureBlock=during.length;result.mainThreadBlockMs=end-start;result.cpuThrottle=4;
+ assert.ok(during.length>=3);assert.equal(result.landings,1);assert.equal(result.phase,'resting');assert.equal(result.radius,250);assert.equal(result.carriers,2);assert.ok(result.sameRotation);assert.ok(Number.isInteger(result.pocket));
+ const difference=((result.angle-pocketAngle(result.pocket))%360+540)%360-180;assert.ok(Math.abs(difference)<=REST_OFFSET+.01,'Physical ball must rest inside the actual API pocket (against a fret at most)');assert.ok(Math.abs(((result.relative-result.angle)%360+540)%360-180)<.01||Math.abs(((result.relative-pocketAngle(result.pocket))%360+540)%360-180)<=REST_OFFSET+1e-7);
+ await x.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:2,mobile:true});await sleep(200);assert.ok(await x.ev(`qaLiveWheel===document.querySelector('[data-testid="roulette-wheel"]')&&qaRotorAnimation===qaLiveWheel.querySelector('[data-testid="wheel-rotor"]').getAnimations()[0]`));
+ during.slice(0,6).forEach((frame,i)=>fs.writeFileSync(path.join(OUT,'capture-frame-'+i+'.jpg'),Buffer.from(frame.data,'base64')));fs.writeFileSync(path.join(OUT,'flight-performance.json'),JSON.stringify(result,null,2));assert.deepEqual(x.errors,[]);await x.send('Emulation.setCPUThrottlingRate',{rate:1});await x.close();console.log('PASS actual API ball capture across CPU4x/500ms JS stall, exact pocket, one landing, rotation continuity',JSON.stringify(result));
+})().catch(e=>{console.error(e);process.exit(1)});

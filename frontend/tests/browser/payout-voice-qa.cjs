@@ -1,0 +1,21 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const {open,sleep,OUT}=require('./mobile-controls-qa.cjs');
+async function finish(x){for(let i=0;i<240;i++){await sleep(75);await x.click('Skip ahead');await x.click('Collect winnings');if(await x.ev(`!document.querySelector('button[title="Spin (Space)"]').disabled`))return}throw Error('Round did not finish')}
+(async()=>{
+ const geometry=[];
+ const x=await open(Number(process.env.W||874),Number(process.env.H||298));await x.tap('button[title="10 $TICS chip (key 3)"]');
+ await x.ev(`(()=>{for(const b of document.querySelectorAll('[data-zone-key]')){const k=b.dataset.zoneKey;let use=/^(straight|corner|street):/.test(k);if(k.startsWith('split:')){const [a,c]=k.slice(6).split(',').map(Number);use=a===0||c===0||Math.ceil(a/3)===Math.ceil(c/3)}if(use)b.click()}})()`);assert.equal(await x.ev(`document.querySelectorAll('[data-bet-key]').length`),98,'Keep dense coverage within the real backend 100-bet limit');
+ await x.tap('button[title="Spin (Space)"]');let previous=[],stages=[];
+ for(let i=0;i<350;i++){await sleep(60);const state=await x.ev(`(()=>{const pops=[...document.querySelectorAll('.felt-payout-pop')];if(!pops.length)return null;return{count:pops.length,keys:pops.map(p=>p.dataset.payoutKey),onChips:pops.every(p=>!!document.querySelector('[data-bet-key="'+p.dataset.payoutKey+'"]'))}})()`);if(!state)continue;
+  assert.ok(state.onChips,'each pop belongs to a real winning chip');
+  const vis=await x.ev(`(()=>{const felt=document.querySelector('.felt-table').getBoundingClientRect(),els=[...document.querySelectorAll('.felt-payout-label,.felt-payout-total')].map(e=>e.getBoundingClientRect());const inside=els.every(r=>r.left>=felt.left-1&&r.right<=felt.right+1&&r.top>=felt.top-1&&r.bottom<=felt.bottom+1);let overlap=false;for(let i=0;i<els.length;i++)for(let j=i+1;j<els.length;j++){const a=els[i],b=els[j];if(a.left<b.right-1&&b.left<a.right-1&&a.top<b.bottom-1&&b.top<a.bottom-1)overlap=true}return{inside,overlap,total:!!document.querySelector('[data-testid=felt-payout-total]')}})()`);
+  assert.ok(vis.inside&&!vis.overlap&&vis.total===(state.count>1),'winnings labels visible, unclipped and not overlapping '+JSON.stringify(vis));for(const k of previous)assert.ok(state.keys.includes(k),'Previously paid pops must remain visible');previous=state.keys;
+  if(!stages.some(s=>s.count===state.count)){stages.push(state);await x.shot('accumulation-'+state.count)}if(state.count>=3)break;
+ }
+ assert.ok(stages.some(s=>s.count>=3));await finish(x);
+ const voice=await x.ev(`qaVoiceStarts.filter(v=>v.url.startsWith('/voice/')&&Number.isInteger(Number(v.url.split('/').at(-1).split('.')[0])))`);assert.ok(voice.length&&voice.every(v=>v.end&&v.end-v.start>=v.duration*900),'Full result audio must play through its colour/parity, not be cut short: '+JSON.stringify(voice));
+ const a=await open(844,390);await a.tap('button[aria-label="Sound settings"]');await a.tap('input[value="female"]');await a.click('Close sound settings');await a.tap('button[title="10 $TICS chip (key 3)"]');await a.ev(`(()=>{for(let n=0;n<=36;n++)document.querySelector('button[title="Straight: '+n+'"]').click()})()`);await a.tap('button[title="Repeat this bet automatically until you stop it or run out of balance"]');
+ for(let i=0;i<150;i++){await sleep(75);if(await a.ev(`qaVoiceStarts.some(v=>v.url.startsWith('/voice/female/')&&Number.isInteger(Number(v.url.split('/').at(-1).split('.')[0])))`))break}await a.click('Stop');await finish(a);
+ const autoVoice=await a.ev(`qaVoiceStarts.filter(v=>v.url.startsWith('/voice/female/')&&Number.isInteger(Number(v.url.split('/').at(-1).split('.')[0])))`);assert.equal(autoVoice.length,1,'Auto-bet must announce every result in the selected dealer voice');assert.ok(autoVoice[0].end-autoVoice[0].start>=autoVoice[0].duration*900);assert.deepEqual(a.errors,[]);await a.close();
+ const report={geometry,stages,voice,autoVoice,api:process.env.REAL_API?'live':'controlled fixture'};fs.writeFileSync(path.join(OUT,'precision-reveal.json'),JSON.stringify(report,null,2));assert.deepEqual(x.errors,[]);await x.close();console.log('PASS accumulating winnings and full decoded manual/auto result voice',JSON.stringify({viewports:geometry.length,stages:stages.map(s=>s.count),voice}));
+})().catch(e=>{console.error(e);process.exit(1)});

@@ -1,0 +1,39 @@
+name = "betics-payouts"
+main = "src/index.js"
+account_id = "046a96b420dcb9935276d06833941737"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+# No public address of any kind: reached only through service bindings.
+workers_dev = false
+preview_urls = false
+
+[durable_objects]
+bindings = [
+  { name = "QUEUE", class_name = "PayoutQueue" },
+  { name = "CASINO", class_name = "DemoCasino", script_name = "betics" },
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PayoutQueue"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "betics-db"
+database_id = "3f28043c-59c0-4f56-afbc-ae2a9a35305a"
+
+# Pinned token contract and chain: payouts refuse to sign if settings or a withdrawal row say otherwise.
+[vars]
+TICS_TOKEN = "0x551ecfdba071cb6541f642cb90a073c8c158df05"
+CHAIN_ID = "1"
+
+[triggers]
+crons = ["* * * * *"]
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+# Secrets (wrangler secret put): INTERNAL_SECRET (same as betics), CASINO_KEY_KEK, ALCHEMY_API_KEY (or ETH_RPC_URL),
+# TREASURY_SECRET (same value as betics-admin's TREASURY_SECRET; without it POST /treasury answers 503),
+# optional ETH_RPC_URL_2 (a second, independent Ethereum provider; without it every "no receipt" decision is left to a person as 'blocked').

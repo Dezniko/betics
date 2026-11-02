@@ -1,0 +1,19 @@
+{
+  "name": "betics",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "npm --prefix frontend run build",
+    "test": "node --test frontend/tests/*.test.mjs worker/*.test.mjs payouts/*.test.mjs",
+    "dev": "wrangler dev --port 8789",
+    "deploy": "npm run test && npm run build && wrangler deploy"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "viem": "^2.57.13"
+  }
+}
