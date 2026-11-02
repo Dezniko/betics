@@ -9,7 +9,7 @@ import { DemoCasino } from '../worker/index.js';
 import { createD1 } from '../test-support/d1shim.mjs';
 import { OFFICIAL_TICS, ERC20_ABI, TRANSFER_TOPIC } from '../worker/tics.js';
 
-const MIGRATIONS = ['0001_platform.sql', '0002_payments.sql', '0003_tics.sql', '0004_spin_holds.sql', '0005_audit_fixes.sql', '0006_admin.sql', '0007_r3.sql'].map((f) => new URL(`../migrations/${f}`, import.meta.url).pathname);
+const MIGRATIONS = ['0001_platform.sql', '0002_payments.sql', '0003_tics.sql', '0004_spin_holds.sql', '0005_audit_fixes.sql', '0006_admin.sql', '0007_r3.sql', '0008_reaudit.sql'].map((f) => new URL(`../migrations/${f}`, import.meta.url).pathname);
 
 function doStorage() {
   const db = new DatabaseSync(':memory:');
@@ -91,7 +91,9 @@ async function setup() {
   const addPlayer = async (units) => {
     const address = privateKeyToAccount(generatePrivateKey()).address.toLowerCase();
     DB.raw.prepare("INSERT INTO players (id, wallet_address) VALUES (?, ?)").run(address, address);
-    await env.CASINO.get(address).fetch(new Request('https://wallet/internal/tics-deposit', { method: 'POST', headers: { 'X-Internal-Secret': 's3cret' }, body: JSON.stringify({ ref: `td:1-0x${randomBytes(32).toString('hex')}-0`, amountCents: units, playerId: address }) }));
+    const tx = `0x${randomBytes(32).toString('hex')}`;
+    DB.raw.prepare("INSERT INTO chain_deposits (id, chain_id, tx_hash, log_index, block_number, from_address, to_address, amount_wei, amount_units, player_id, status, credited_at, tx_ordinal) VALUES (?, 1, ?, 0, 1, ?, ?, '1', ?, ?, 'credited', datetime('now'), 0)").run(`1:${tx}:0`, tx, address, casino, units, address);
+    await env.CASINO.get(address).fetch(new Request('https://wallet/internal/tics-deposit', { method: 'POST', headers: { 'X-Internal-Secret': 's3cret' }, body: JSON.stringify({ ref: `td:1-${tx}-0`, amountCents: units, playerId: address }) }));
     return address;
   };
   const withdraw = async (address, units, fee = 0) => {

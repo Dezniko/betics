@@ -672,6 +672,22 @@ export class DemoCasino {
       fail(404, 'demo endpoint not found');
     });
   }
+  // A credit needs a recorded on-chain deposit behind it: the central deposits table must hold that exact
+  // transfer (chain, transaction, log), for the same amount, linked to THIS player, credited or assigned
+  // and not reversed. Holding the internal secret alone (a bug or a stolen key in the admin panel or
+  // game Worker) is then no longer enough to make money appear. Someone who can also write the deposits
+  // table can still fake a row: that limit is part of a custodial design and is stated in the README.
+  async depositEvidence(body) {
+    if (!this.env.DB) return; // unit tests of the object alone; production always has the database
+    const m = typeof body?.ref === 'string' && body.ref.match(/^td:(\d{1,12})-(0x[0-9a-f]{64})-(\d{1,9})$/);
+    if (!m) fail(400, 'invalid payment ref');
+    if (this.one('SELECT ref FROM processed_payments WHERE ref = ?', body.ref)) return; // a repeat: answered as a duplicate
+    const row = await this.env.DB.prepare('SELECT amount_units, player_id, status, reversed_at FROM chain_deposits WHERE chain_id = ? AND tx_hash = ? AND log_index = ?')
+      .bind(Number(m[1]), m[2], Number(m[3])).first();
+    const playerId = this.getMeta('player_id') || body.playerId;
+    if (!row || row.amount_units !== body.amountCents || !playerId || row.player_id !== playerId
+      || !['credited', 'assigned'].includes(row.status) || row.reversed_at) fail(409, 'No recorded deposit matches this credit. Nothing was credited.');
+  }
   // Real-money movements. Each has a unique ref so a repeated call (webhook
   // retry, double click) never moves money twice.
   paymentOp(kind, body) {
@@ -856,6 +872,7 @@ export class DemoCasino {
         const op = pathname.match(/^\/internal\/(deposit|withdraw-hold|withdraw-release)$/);
         if (method === 'POST' && op) { const result = this.paymentOp(op[1], body); await this.flush(); return json(result); }
         const tics = pathname.match(/^\/internal\/(tics-deposit|tics-hold|tics-finalise|tics-release|tics-hold-check|tics-hold-void)$/);
+        if (method === 'POST' && tics && tics[1] === 'tics-deposit') await this.depositEvidence(body);
         if (method === 'POST' && tics) { const result = this.ticsOp(tics[1], body); if (!tics[1].startsWith('tics-hold-')) await this.flush(); return json(result); }
         fail(404, 'demo endpoint not found');
       }

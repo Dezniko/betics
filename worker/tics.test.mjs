@@ -11,7 +11,7 @@ import { createD1 } from '../test-support/d1shim.mjs';
 import { weiToUnits, unitsToWei, formatTics, normAddress, OFFICIAL_TICS, TRANSFER_TOPIC, decodeTransfers, rpcClient } from './tics.js';
 import { chainTick, parseHoldings, refreshHoldings, HOLDINGS_DAILY_CAP } from './wallet.js';
 
-const MIGRATIONS = ['0001_platform.sql', '0002_payments.sql', '0003_tics.sql', '0004_spin_holds.sql', '0005_audit_fixes.sql', '0006_admin.sql', '0007_r3.sql'].map((f) => new URL(`../migrations/${f}`, import.meta.url).pathname);
+const MIGRATIONS = ['0001_platform.sql', '0002_payments.sql', '0003_tics.sql', '0004_spin_holds.sql', '0005_audit_fixes.sql', '0006_admin.sql', '0007_r3.sql', '0008_reaudit.sql'].map((f) => new URL(`../migrations/${f}`, import.meta.url).pathname);
 const HOST = 'betics.example';
 const CASINO = '0xc0ffee0000000000000000000000000000000001';
 const FAKE_TICS = '0xad34bbc446785fc7f2995578c7273f706ebea177';
@@ -1138,4 +1138,42 @@ test('R4 provider calls: a node that never answers times out, and a tick can swi
   // A provider's own error answer (not an outage) is never retried elsewhere.
   rpc = rpcClient('https://a.test', async (url, init) => Response.json({ jsonrpc: '2.0', id: 1, error: { message: 'execution reverted' } }), { fallbackUrl: 'https://b.test' });
   await assert.rejects(rpc('eth_call', [{}]), /execution reverted/);
+});
+
+test('R3 a credit through the internal route needs a matching recorded deposit for that player', async () => {
+  const p = platform();
+  try {
+    const a = await funded(p);
+    const before = await realOf(p, a.cookie);
+    const obj = p.env.CASINO.get(a.address);
+    const credit = (ref, amountCents, playerId = a.address) => obj.fetch(new Request('https://wallet/internal/tics-deposit', { method: 'POST',
+      headers: { 'X-Internal-Secret': 'test-secret', 'Content-Type': 'application/json' }, body: JSON.stringify({ ref, amountCents, playerId }) }));
+    // The auditor's case: a made up reference with the internal secret.
+    const fake = `td:1-0x${'ab'.repeat(32)}-0`;
+    const r = await credit(fake, 99_999_900);
+    assert.equal(r.status, 409);
+    assert.equal(await realOf(p, a.cookie), before, 'nothing credited');
+    // A recorded deposit not credited yet: the wrong amount or another player's is refused.
+    const tx1 = `0x${'ef'.repeat(32)}`;
+    p.DB.raw.prepare("INSERT INTO chain_deposits (id, chain_id, tx_hash, log_index, block_number, from_address, to_address, amount_wei, amount_units, player_id, status, tx_ordinal) VALUES (?, 1, ?, 3, 5, ?, ?, '1', 700, ?, 'credited', 0)").run(`1:${tx1}:3`, tx1, a.address, CASINO, a.address);
+    const ref = `td:1-${tx1}-3`;
+    assert.equal((await credit(ref, 701)).status, 409, 'wrong amount');
+    const other = await p.login();
+    const otherId = other.account.address.toLowerCase();
+    await p.call('/api/session', { cookie: other.cookie, body: {} });
+    const r2 = await p.env.CASINO.get(otherId).fetch(new Request('https://wallet/internal/tics-deposit', { method: 'POST', headers: { 'X-Internal-Secret': 'test-secret', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ref, amountCents: 700, playerId: otherId }) }));
+    assert.equal(r2.status, 409, 'cannot be credited to another player');
+    assert.equal(await realOf(p, a.cookie), before);
+    // The matching credit goes through once; a repeat moves nothing.
+    assert.equal((await credit(ref, 700)).status, 200);
+    assert.equal(await realOf(p, a.cookie), before + 700);
+    const again = await credit(ref, 700);
+    assert.equal((await again.json()).duplicate, true);
+    assert.equal(await realOf(p, a.cookie), before + 700);
+    // A reversed deposit can never be credited (again).
+    const tx2 = `0x${'cd'.repeat(32)}`;
+    p.DB.raw.prepare("INSERT INTO chain_deposits (id, chain_id, tx_hash, log_index, block_number, from_address, to_address, amount_wei, amount_units, player_id, status, tx_ordinal, reversed_at) VALUES (?, 1, ?, 0, 5, ?, ?, '1', 500, ?, 'credited', 0, datetime('now'))").run(`1:${tx2}:0`, tx2, a.address, CASINO, a.address);
+    assert.equal((await credit(`td:1-${tx2}-0`, 500)).status, 409);
+  } finally { p.restore(); }
 });
