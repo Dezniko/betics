@@ -223,12 +223,16 @@ export default function WalletPanel({ profile, wallet, mobile, deposit, onTopUp,
   const [disconnecting, setDisconnecting] = useState(false);
   const pending = profile.withdrawals.some((w) => ['queued', 'signing', 'sending'].includes(w.status));
   const refreshRef = useRef(onRefresh); refreshRef.current = onRefresh;
+  // Also while a top up is not final yet, so the Withdraw tab opens as soon as it is confirmed.
+  const waiting = !!profile.withdrawPendingSince;
   useEffect(() => {
-    if (!pending) return;
+    if (!pending && !waiting) return;
     const t = setInterval(() => refreshRef.current(), 10000);
     return () => clearInterval(t);
-  }, [pending]);
+  }, [pending, waiting]);
   const [tab, setTab] = useState(deposit && !deposit.final ? 'topup' : pending ? 'activity' : 'topup');
+  // Opening the Withdraw tab reads the profile again, so it never shows an old 'still being confirmed'.
+  useEffect(() => { if (tab === 'withdraw') refreshRef.current(); }, [tab]);
   const member = since(profile.firstConnectedAt);
   const activityCount = profile.deposits.length + profile.withdrawals.length;
   const held = heldRowText(profile.withdrawals);

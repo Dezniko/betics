@@ -1527,3 +1527,13 @@ test('verification F2: review without a second provider pauses and alerts even i
     assert.equal(await realOf(p, a.cookie), 500_000, 'nothing taken back without a second provider');
   } finally { p.restore(); }
 });
+
+test('the Worker entry module only exports handlers and classes (anything else stops the Workers runtime from starting)', async () => {
+  for (const dir of ['./index.js', '../payouts/src/index.js']) {
+    const mod = await import(dir);
+    for (const [name, value] of Object.entries(mod)) {
+      if (name === 'default') { assert.equal(typeof value?.fetch, 'function', `${dir} default export has fetch`); continue; }
+      assert.equal(typeof value, 'function', `${dir} export ${name} is a ${typeof value}`);
+    }
+  }
+});

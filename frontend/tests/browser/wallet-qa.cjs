@@ -173,9 +173,19 @@ const pass = (msg) => console.log('PASS', msg);
   await chain('test_mine', [{ blocks: 2 }]);
   await x.waitFor(`document.querySelector('[data-testid=topup-status]')?.dataset.status==='credited'`, 25000, 'credited');
   assert.match(await x.text('[data-testid=topup-status]'), /^Credited 5,000\.00 \$TICS/);
+  assert.match(await x.text('[data-testid=topup-status]'), /Credited 5,000\.00 \$TICS\. You can play now\. Withdrawals open in about 15 minutes\./);
+  assert.match(await x.text('[data-testid=topup-wait-note]'), /^You can play as soon as your top up is credited\. Withdrawals open about 15 minutes after it arrives/);
   await x.waitFor(`document.querySelector('[data-testid=panel-real-balance]').textContent==='5,000.00 $TICS'`, 10000, 'real balance refreshed');
   await x.waitFor(`!document.querySelector('[data-testid=panel-demo-balance]')`, 5000, 'demo row hidden');
   shots.push(await x.shot('panel-topup-credited'));
+  // Not final on Ethereum yet (the cron has not run): the Withdraw tab explains the wait and Withdraw is greyed out.
+  await x.click('[data-testid=tab-withdraw]');
+  await x.waitFor(`/^Your latest top up is still being confirmed on Ethereum\\. Withdrawals open in about 1[45] minutes\\. You can keep playing in the meantime\\.$/.test(document.querySelector('[data-testid=withdraw-wait]')?.textContent || '')`, 10000, 'withdraw wait note');
+  await x.type('[data-testid=withdraw-amount]', '3000');
+  assert.ok(await x.ev(`document.querySelector('[data-testid=withdraw-send]').disabled`), 'Withdraw greyed out while the top up is not final');
+  shots.push(await x.shot('panel-withdraw-waiting'));
+  await x.type('[data-testid=withdraw-amount]', '');
+  await x.click('[data-testid=tab-topup]'); await sleep(300);
   await x.click('.wallet-panel .fair-head button'); await sleep(400);
   await x.waitFor(`document.querySelector('[data-testid=mode-switch]').dataset.mode==='real'&&!document.querySelector('[data-testid=mode-demo]')&&!document.querySelector('.demo-refill')`, 5000, 'real forced');
   assert.equal(await x.text('[data-testid=header-balance]'), '5,000.00 $TICS');
@@ -205,6 +215,11 @@ const pass = (msg) => console.log('PASS', msg);
   await x.click('[data-testid=wallet-chip]'); await x.waitFor(`!!document.querySelector('[data-testid=tab-withdraw]')`);
   await x.click('[data-testid=tab-withdraw]'); await x.waitFor(`!!document.querySelector('[data-testid=withdraw-amount]')`);
   await sleep(800); // quote loads when the form opens
+  // The top up is final once the cron has seen it in a final block (the local test chain finalizes at once);
+  // the tab re-reads the profile, so the 'still being confirmed' note goes and Withdraw works.
+  await scheduled();
+  await x.click('[data-testid=tab-topup]'); await sleep(300); await x.click('[data-testid=tab-withdraw]');
+  await x.waitFor(`!document.querySelector('[data-testid=withdraw-wait]')`, 25000, 'withdraw wait note gone once final');
   const quote = (await api(x, '/api/wallet/withdraw/quote')).body;
   await x.ev(`window.qaWithdraw=null;(()=>{const f=window.fetch;window.fetch=async(...a)=>{if(String(a[0]).endsWith('/wallet/withdraw'))window.qaWithdraw=JSON.parse(a[1].body);return f(...a)}})()`);
   const fmt = (u) => `${Math.floor(u / 100).toLocaleString('en-US')}.${String(u % 100).padStart(2, '0')} $TICS`;

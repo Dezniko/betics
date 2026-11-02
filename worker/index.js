@@ -33,7 +33,8 @@ const ROBOTS = 'noindex, nofollow, noarchive';
 // Set by the platform Worker only; any copy sent by a browser is stripped.
 const CONTEXT_HEADER = 'X-Platform-Context';
 const INTERNAL_HEADER = 'X-Internal-Secret';
-export const WITHDRAW_WAIT_MESSAGE = 'Your latest top up is still being confirmed on Ethereum. You can withdraw about 15 minutes after it arrived.';
+// Not exported: the Workers runtime only accepts handlers and classes as named exports of the entry module.
+const WITHDRAW_WAIT_MESSAGE = 'Your latest top up is still being confirmed on Ethereum. You can withdraw about 15 minutes after it arrived.';
 const STATUS_MESSAGES = {
   frozen: 'Your account is paused. Please contact support.',
   banned: 'This account has been closed.',
