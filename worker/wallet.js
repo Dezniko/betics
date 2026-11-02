@@ -185,7 +185,13 @@ export function freeFloatFrom(snapshot, now = Date.now()) {
 // Live view for spins and the public reserve card: the cached on-chain wallet balance minus what
 // players are owed right now and minus the exposure of real spins in progress (spin_holds).
 // The most one spin may PAY (total return, stake included) is a share of that free float.
-const HOLD_TTL_MS = 60_000;
+// A booking is not released by time any more (re-audit R1): it stays counted until the Worker sees the
+// spin answered with its balance in the central copy, the player's wallet copies it (its flush deletes
+// the booking in the same batch as the new balance), or the cron learns the spin never happened.
+// expires_at is set far ahead so every reader that counts "expires_at > now" keeps counting it.
+const HOLD_KEEP_MS = 10 * 365 * 86_400_000;
+export const HOLD_CHECK_AFTER_MS = 120_000;
+export const HOLD_ALERT_AFTER_MS = 10 * 60_000;
 const openHolds = async (db, now) => (await db.prepare('SELECT COALESCE(SUM(units),0) AS n FROM spin_holds WHERE expires_at > ?').bind(now).first().catch(() => ({ n: 0 })))?.n || 0;
 // A payout marked 'sent' no longer counts as owed, but the snapshot's token balance may have been read
 // before it left the wallet (the snapshot is refreshed about once a minute and used for up to 10). So
@@ -225,17 +231,34 @@ export async function liveFloatCached(db, settings, now = Date.now()) {
 export async function reserveSpinExposure(db, { id, playerId, units, now = Date.now() }) {
   if (!Number.isSafeInteger(units) || units < 0) return false;
   const since = `(SELECT datetime(CAST(json_extract(value, '$.at') AS INTEGER) / 1000 - ${SENT_MARGIN_S}, 'unixepoch') FROM chain_state WHERE key = 'float')`;
-  const r = await db.prepare(`INSERT INTO spin_holds (id, player_id, units, expires_at)
-    SELECT ?1, ?2, ?3, ?4
+  const r = await db.prepare(`INSERT INTO spin_holds (id, player_id, units, expires_at, booked_at)
+    SELECT ?1, ?2, ?3, ?4, ?5
     WHERE COALESCE((SELECT json_extract(value, '$.tokenUnits') FROM chain_state WHERE key = 'float'), 0)
       - ${sentSinceSql(since)}
       - (${OWED_SQL})
       - (SELECT COALESCE(SUM(units), 0) FROM spin_holds WHERE expires_at > ?5) >= ?3`)
-    .bind(id, playerId, units, now + HOLD_TTL_MS, now).run();
+    .bind(id, playerId, units, now + HOLD_KEEP_MS, now).run();
   return (r.meta?.changes ?? r.changes ?? 0) === 1;
 }
 export async function releaseSpinExposure(db, id) {
   await db.prepare('DELETE FROM spin_holds WHERE id = ?').bind(id).run().catch(() => {});
+}
+// Cron: bookings the Worker could not release (no reply from the wallet, or its central copy failed).
+// Ask the player's wallet: 'void' (the spin never ran there, and now never will) or 'flushed' (its balance
+// is in the central copy) -> release. 'pending' -> keep counting it, and alert once it is 10 minutes old.
+export async function sweepSpinHolds(env, now = Date.now()) {
+  const db = env.DB, out = { checked: 0, released: 0, kept: 0 };
+  const { results = [] } = await db.prepare('SELECT id, player_id, units, booked_at FROM spin_holds WHERE booked_at IS NOT NULL AND booked_at < ? ORDER BY booked_at LIMIT 25')
+    .bind(now - HOLD_CHECK_AFTER_MS).all();
+  for (const h of results) {
+    out.checked++;
+    const state = await walletOp(env, h.player_id, 'hold-status', { holdId: h.id }).then((r) => r.state, (e) => { console.error('hold check failed', h.id, e?.message || e); return null; });
+    if (state === 'void' || state === 'flushed') { await releaseSpinExposure(db, h.id); out.released++; continue; }
+    out.kept++;
+    if (now - h.booked_at >= HOLD_ALERT_AFTER_MS) await raise(db, { type: 'tics_hold_stuck', severity: 'warning', key: `tics_hold_stuck:${h.id}`, playerId: h.player_id,
+      title: 'A real spin has not reached the central copy', details: `The balance after a real spin of ${h.player_id} has not been copied to the central database for over 10 minutes. Its possible win (${formatTics(h.units)}) stays counted against the casino wallet, so every win is still covered, but the copy keeps failing. Check the game Worker logs.` }).run().catch(() => {});
+  }
+  return out;
 }
 export async function pruneSpinHolds(db, now = Date.now()) {
   await db.prepare('DELETE FROM spin_holds WHERE expires_at < ?').bind(now - 3600_000).run().catch(() => {});
@@ -488,6 +511,7 @@ export async function chainTick(env, deps = {}) {
   ]).catch(() => {});
   // Before anything that needs the blockchain node, so an RPC outage does not stop it.
   await settleHoldingRows(env).catch((e) => console.error('holding sweep failed', e));
+  await sweepSpinHolds(env).catch((e) => console.error('spin booking sweep failed', e));
   const settings = await ticsSettings(env.DB);
   if (!settings.casinoWallet) return { skipped: 'no casino wallet' };
   const rpc = deps.rpc || rpcClient(rpcUrl(env, settings.chainId), deps.fetch, { fallbackUrl: env.ETH_RPC_URL_2 || null });

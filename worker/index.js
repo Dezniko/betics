@@ -436,6 +436,7 @@ export default {
               holdId = `${player.id}:${typeof spinBody.requestId === 'string' ? spinBody.requestId.slice(0, 40) : ''}:${crypto.randomUUID()}`;
               const booked = await reserveSpinExposure(env.DB, { id: holdId, playerId: player.id, units: Math.max(0, worst - stake) });
               if (!booked) { holdId = null; fail(503, 'Several big bets are being played at this moment. Please try again in a few seconds.'); }
+              context.holdId = holdId; // the wallet records it with the spin, and its central copy releases it
             }
           }
         }
@@ -450,7 +451,8 @@ export default {
       finally {
         // Free the booking once the settled balance is in the central copy (the Durable Object says so).
         // If that copy is still pending, or the call failed with no reply (the spin may have settled
-        // anyway), the booking simply expires a minute later.
+        // anyway), the booking stays counted: the wallet's next central copy deletes it, or the cron asks
+        // the wallet about it (sweepSpinHolds). It never just runs out.
         if (holdId && response && response.headers.get('X-Flushed') !== '0') await releaseSpinExposure(env.DB, holdId);
         response?.headers.delete('X-Flushed'); // internal signal only
       }
@@ -510,6 +512,10 @@ export class DemoCasino {
       );
     `);
     this.sql.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    // Spin bookings (D1 spin_holds) this wallet knows: 'pending' = the spin settled here, its balance is not in
+    // the central copy yet; 'flushed' = it is; 'void' = asked about before the spin ever ran, so it never will.
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS spin_hold_marks (hold_id TEXT PRIMARY KEY, state TEXT NOT NULL CHECK (state IN ('pending', 'flushed', 'void')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
     // Real money is a separate balance; play money stays in users.balance_cents.
     this.sql.exec(`CREATE TABLE IF NOT EXISTS real_wallet (id INTEGER PRIMARY KEY CHECK (id = 1), balance_cents INTEGER NOT NULL DEFAULT 0 CHECK (balance_cents >= 0));
       CREATE TABLE IF NOT EXISTS processed_payments (ref TEXT PRIMARY KEY, created_at TEXT NOT NULL DEFAULT (datetime('now')));`);
@@ -551,7 +557,11 @@ export class DemoCasino {
         const ledgerMark = Number(this.getMeta('ledger_mark') || 0), roundMark = Number(this.getMeta('round_mark') || 0);
         const ledger = this.sql.exec('SELECT * FROM ledger WHERE id > ? ORDER BY id LIMIT 100', ledgerMark).toArray();
         const rounds = this.sql.exec("SELECT * FROM rounds WHERE id > ? AND status = 'settled' ORDER BY id LIMIT 100", roundMark).toArray();
-        if (!ledger.length && !rounds.length && pass > 0) break;
+        // Bookings of spins already settled here. Read in the same synchronous step as the balance below,
+        // so the batch that writes this balance also deletes exactly their bookings (D1 runs a batch as one
+        // transaction): a possible win stops being counted only when the win itself is counted.
+        const holds = this.sql.exec("SELECT hold_id FROM spin_hold_marks WHERE state = 'pending' LIMIT 50").toArray().map((r) => r.hold_id);
+        if (!ledger.length && !rounds.length && !holds.length && pass > 0) break;
         const currency = this.getMeta('currency') || 'USDT';
         const totals = this.one("SELECT COUNT(*) AS n, COALESCE(SUM(stake_cents),0) AS bet, COALESCE(SUM(payout_cents),0) AS paid FROM rounds WHERE status = 'settled'");
         const statements = [
@@ -569,11 +579,13 @@ export class DemoCasino {
           // Each copy carries a rising number; an older copy that lands late (after a timeout) never overwrites a newer one.
           db.prepare('UPDATE players SET balance_cents = ?, real_balance_cents = ?, real_tics_cents = ?, total_bet_cents = ?, total_paid_cents = ?, rounds = ?, flush_seq = ? WHERE id = ? AND flush_seq < ?')
             .bind(this.user().balance_cents, this.realBalance(), this.ticsBalance(), totals.bet, totals.paid, totals.n, seq, playerId, seq),
+          ...(holds.length ? [db.prepare(`DELETE FROM spin_holds WHERE id IN (${holds.map(() => '?').join(', ')})`).bind(...holds)] : []),
         ];
         await db.batch(statements);
+        if (holds.length) this.sql.exec(`UPDATE spin_hold_marks SET state = 'flushed' WHERE state = 'pending' AND hold_id IN (${holds.map(() => '?').join(', ')})`, ...holds);
         if (ledger.length) this.setMeta('ledger_mark', ledger.at(-1).id);
         if (rounds.length) this.setMeta('round_mark', rounds.at(-1).id);
-        if (ledger.length < 100 && rounds.length < 100) break;
+        if (ledger.length < 100 && rounds.length < 100 && holds.length < 50) break;
       }
       return true;
     } catch (error) {
@@ -590,6 +602,7 @@ export class DemoCasino {
     if (!force && now - Number(this.getMeta('pruned_at') || 0) < 3600_000) return;
     this.sql.exec("DELETE FROM idempotency WHERE created_at < datetime('now', '-1 day')");
     this.sql.exec("DELETE FROM entropy_used WHERE created_at < datetime('now', '-1 day')");
+    this.sql.exec("DELETE FROM spin_hold_marks WHERE state != 'pending' AND created_at < datetime('now', '-1 day')");
     this.setMeta('pruned_at', now);
   }
   now() { return Date.now(); }
@@ -670,6 +683,18 @@ export class DemoCasino {
         return { duplicate: false, realTicsCents: this.ticsBalance() };
       }
       fail(404, 'demo endpoint not found');
+    });
+  }
+  // What this wallet knows about a spin booking. Unknown means the spin has not run here: it is closed
+  // for good ('void'), so a spin request still on its way is refused and the booking can be released.
+  holdStatus(body) {
+    const holdId = body?.holdId;
+    if (typeof holdId !== 'string' || !holdId || holdId.length > 200) fail(400, 'invalid hold id');
+    return this.ctx.storage.transactionSync(() => {
+      const row = this.one('SELECT state FROM spin_hold_marks WHERE hold_id = ?', holdId);
+      if (row) return { state: row.state };
+      this.sql.exec("INSERT INTO spin_hold_marks (hold_id, state) VALUES (?, 'void')", holdId);
+      return { state: 'void' };
     });
   }
   // A credit needs a recorded on-chain deposit behind it: the central deposits table must hold that exact
@@ -776,6 +801,8 @@ export class DemoCasino {
           return JSON.parse(cached.response_json);
         }
       }
+      const holdId = typeof context.holdId === 'string' && context.holdId.length <= 200 ? context.holdId : null;
+      if (holdId && this.one("SELECT 1 AS ok FROM spin_hold_marks WHERE hold_id = ? AND state = 'void'", holdId)) fail(409, 'This spin took too long to reach the table. Your bet was not taken. Please try again.');
       // The browser says which payout table it agreed to. If it changed since, refuse before anything is
       // used, with a code the browser recognises (it reloads the table and asks the player again).
       if (body.mathId !== undefined && body.mathId !== math.id) {
@@ -852,6 +879,7 @@ export class DemoCasino {
           nextCommitment: publicCommitment(this.commitment()),
         },
       };
+      if (holdId) this.sql.exec("INSERT OR IGNORE INTO spin_hold_marks (hold_id, state) VALUES (?, 'pending')", holdId);
       if (key !== null) this.sql.exec('INSERT INTO idempotency (request_key, fingerprint, response_json) VALUES (?, ?, ?)', key, fingerprint, JSON.stringify(result));
       return result;
     });
@@ -867,6 +895,11 @@ export class DemoCasino {
         if (!secret || !sameSecret(request.headers.get(INTERNAL_HEADER), secret)) fail(404, 'demo endpoint not found');
         // A deposit can arrive for a wallet that has not opened its game wallet yet: create it.
         if (!this.user() && pathname === '/internal/tics-deposit' && typeof body?.playerId === 'string') { this.setMeta('player_id', body.playerId); this.init({}, Number.isSafeInteger(body.demoStartUnits) ? body.demoStartUnits : DEMO_START_UNITS); }
+        if (method === 'POST' && pathname === '/internal/hold-status') {
+          let r = this.holdStatus(body);
+          if (r.state === 'pending') { await this.flush(); r = this.holdStatus(body); }
+          return json(r);
+        }
         if (!this.user()) fail(404, 'player wallet not found');
         if (method === 'GET' && pathname === '/internal/wallet') return json({ ...this.wallet(), realBalanceCents: this.realBalance(), playerId: this.getMeta('player_id'), ticsReconciled: this.ticsReconciled() });
         const op = pathname.match(/^\/internal\/(deposit|withdraw-hold|withdraw-release)$/);

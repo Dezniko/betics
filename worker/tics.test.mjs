@@ -9,7 +9,7 @@ import worker, { DemoCasino } from './index.js';
 import { clearConfigCache } from './platform.js';
 import { createD1 } from '../test-support/d1shim.mjs';
 import { weiToUnits, unitsToWei, formatTics, normAddress, OFFICIAL_TICS, TRANSFER_TOPIC, decodeTransfers, rpcClient } from './tics.js';
-import { chainTick, parseHoldings, refreshHoldings, HOLDINGS_DAILY_CAP } from './wallet.js';
+import { chainTick, parseHoldings, refreshHoldings, HOLDINGS_DAILY_CAP, sweepSpinHolds, liveFloat, reserveSpinExposure, HOLD_ALERT_AFTER_MS } from './wallet.js';
 
 const MIGRATIONS = ['0001_platform.sql', '0002_payments.sql', '0003_tics.sql', '0004_spin_holds.sql', '0005_audit_fixes.sql', '0006_admin.sql', '0007_r3.sql', '0008_reaudit.sql'].map((f) => new URL(`../migrations/${f}`, import.meta.url).pathname);
 const HOST = 'betics.example';
@@ -844,10 +844,11 @@ test('r3 spin booking is kept when the wallet call fails with no reply (the spin
     obj.fetch = async (req) => { if (new URL(req.url).pathname === '/api/games/roulette/spin') { await orig(req); throw new Error('Durable Object reset'); } return orig(req); };
     const r = await p.spin(a.cookie, [{ type: 'straight', value: 7, amountCents: 1000 }], 'real');
     assert.equal(r.status, 500);
-    assert.equal(p.rows('SELECT COUNT(*) AS n FROM spin_holds')[0].n, 1, 'booking left to expire');
+    // The spin settled and the wallet's central copy went through, and that same copy deleted the booking.
+    assert.equal(p.rows('SELECT COUNT(*) AS n FROM spin_holds')[0].n, 0, 'released by the central copy, not by time');
     obj.fetch = orig;
     assert.equal((await p.spin(a.cookie, [{ type: 'straight', value: 7, amountCents: 1000 }], 'real')).status, 200);
-    assert.equal(p.rows('SELECT COUNT(*) AS n FROM spin_holds')[0].n, 1, 'a normal spin still frees its own booking');
+    assert.equal(p.rows('SELECT COUNT(*) AS n FROM spin_holds')[0].n, 0, 'a normal spin still frees its own booking');
   } finally { p.restore(); }
 });
 
@@ -1175,5 +1176,72 @@ test('R3 a credit through the internal route needs a matching recorded deposit f
     const tx2 = `0x${'cd'.repeat(32)}`;
     p.DB.raw.prepare("INSERT INTO chain_deposits (id, chain_id, tx_hash, log_index, block_number, from_address, to_address, amount_wei, amount_units, player_id, status, tx_ordinal, reversed_at) VALUES (?, 1, ?, 0, 5, ?, ?, '1', 500, ?, 'credited', 0, datetime('now'))").run(`1:${tx2}:0`, tx2, a.address, CASINO, a.address);
     assert.equal((await credit(`td:1-${tx2}-0`, 500)).status, 409);
+  } finally { p.restore(); }
+});
+
+test('R1 a spin whose balance cannot reach the central copy stays counted until it does (no 60 second expiry)', async () => {
+  const p = platform();
+  try {
+    const a = await funded(p, 5000n, 100000n);
+    const obj = p.env.CASINO.get(a.address);
+    // Only THIS player's central copy fails; everything else in the database keeps working.
+    const good = obj.env;
+    obj.env = { ...good, DB: { ...p.DB, prepare: p.DB.prepare, batch: async () => { throw new Error('injected: this player copy fails'); } } };
+    const bet = [{ type: 'straight', value: 7, amountCents: 50_000 }];
+    const r = await p.spin(a.cookie, bet, 'real');
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    const [h] = p.rows('SELECT * FROM spin_holds');
+    assert.ok(h, 'booking kept after a failed central copy');
+    assert.equal(h.units, 1_750_000, 'worst net win of the spin');
+    const settings = JSON.parse(p.rows("SELECT value FROM settings WHERE key = 'tics_payments'")[0].value);
+    // The auditor's case: minutes later, with the central copy still stale, the booking is still counted.
+    const later = Date.now() + 5 * 60_000;
+    p.DB.raw.prepare("UPDATE chain_state SET value = json_set(value, '$.at', ?) WHERE key = 'float'").run(later - 1000);
+    const live = await liveFloat(p.DB, settings, later);
+    assert.equal(live.heldUnits, 1_750_000);
+    // A booking that would need that money again is refused.
+    const free = live.freeUnits;
+    assert.equal(await reserveSpinExposure(p.DB, { id: 'x1', playerId: 'other', units: free + 1, now: later }), false);
+    assert.equal(await reserveSpinExposure(p.DB, { id: 'x2', playerId: 'other', units: free, now: later }), true);
+    p.DB.raw.prepare("DELETE FROM spin_holds WHERE id IN ('x1', 'x2')").run();
+    // The cron asks the wallet: settled here but not copied, so it stays, and after 10 minutes an alert is raised.
+    let out = await sweepSpinHolds(p.env, Date.now() + 3 * 60_000);
+    assert.deepEqual(out, { checked: 1, released: 0, kept: 1 });
+    assert.equal(p.rows("SELECT COUNT(*) AS n FROM alerts WHERE type = 'tics_hold_stuck'")[0].n, 0);
+    await sweepSpinHolds(p.env, Date.now() + HOLD_ALERT_AFTER_MS + 60_000);
+    assert.equal(p.rows("SELECT COUNT(*) AS n FROM alerts WHERE type = 'tics_hold_stuck'")[0].n, 1);
+    assert.equal(p.rows('SELECT COUNT(*) AS n FROM spin_holds')[0].n, 1);
+    // Once the copy works again, the same cron check copies the balance and frees the booking together.
+    obj.env = good;
+    out = await sweepSpinHolds(p.env, Date.now() + 15 * 60_000);
+    assert.deepEqual(out, { checked: 1, released: 1, kept: 0 });
+    assert.equal(p.rows('SELECT COUNT(*) AS n FROM spin_holds')[0].n, 0);
+    const [pl] = p.rows('SELECT real_tics_cents FROM players WHERE id = ?', a.address);
+    assert.equal(pl.real_tics_cents, await realOf(p, a.cookie), 'central copy now has the real balance');
+  } finally { p.restore(); }
+});
+
+test('R1 a spin that never reached the wallet: the cron closes it, frees the booking, and a late arrival is refused', async () => {
+  const p = platform();
+  try {
+    const a = await funded(p, 5000n, 100000n);
+    const obj = p.env.CASINO.get(a.address); const orig = obj.fetch.bind(obj);
+    let held = null;
+    obj.fetch = async (req) => { if (new URL(req.url).pathname === '/api/games/roulette/spin') { held = req.clone(); throw new Error('lost on the way'); } return orig(req); };
+    const before = await realOf(p, a.cookie);
+    const r = await p.spin(a.cookie, [{ type: 'red', amountCents: 10_000 }], 'real');
+    assert.equal(r.status, 500);
+    assert.equal(p.rows('SELECT COUNT(*) AS n FROM spin_holds')[0].n, 1, 'kept: the Worker cannot know whether it ran');
+    obj.fetch = orig;
+    const out = await sweepSpinHolds(p.env, Date.now() + 3 * 60_000);
+    assert.deepEqual(out, { checked: 1, released: 1, kept: 0 });
+    assert.equal(p.rows('SELECT COUNT(*) AS n FROM spin_holds')[0].n, 0);
+    // The same request turning up late (with its booking id) is refused and moves no money.
+    const late = await orig(held);
+    assert.equal(late.status, 409);
+    assert.equal(await realOf(p, a.cookie), before);
+    // Normal spins carry on.
+    assert.equal((await p.spin(a.cookie, [{ type: 'red', amountCents: 10_000 }], 'real')).status, 200);
+    assert.equal(p.rows('SELECT COUNT(*) AS n FROM spin_holds')[0].n, 0);
   } finally { p.restore(); }
 });
