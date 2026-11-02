@@ -134,11 +134,13 @@ export async function revokeWalletSession(db, token) {
 
 // ---------- profile ----------
 export async function profile(db, player, settings) {
-  const [email, deposits, withdrawals, fee] = await Promise.all([
+  const [email, deposits, withdrawals, fee, pending] = await Promise.all([
     db.prepare("SELECT value, consent FROM player_identities WHERE player_id = ? AND kind = 'email' ORDER BY created_at DESC LIMIT 1").bind(player.id).first(),
     db.prepare("SELECT tx_hash, amount_units, status, created_at, credited_at FROM chain_deposits WHERE player_id = ? OR from_address = ? ORDER BY created_at DESC LIMIT 20").bind(player.id, player.id).all(),
     db.prepare("SELECT id, amount_units, fee_units, send_units, status, tx_hash, created_at, sent_at FROM chain_withdrawals WHERE player_id = ? AND kind = 'player' ORDER BY created_at DESC LIMIT 20").bind(player.id).all(),
     withdrawalFee(db, settings),
+    db.prepare(`SELECT MAX(credited_at) AS since FROM chain_deposits WHERE finalized_at IS NULL AND reversed_at IS NULL AND review_at IS NULL
+      AND player_id = ? AND status IN ('credited', 'assigned') AND credited_at IS NOT NULL`).bind(player.id).first(),
   ]);
   return {
     address: checksum(player.wallet_address), firstConnectedAt: player.first_connected_at, termsAcceptedAt: player.terms_accepted_at,
@@ -148,6 +150,8 @@ export async function profile(db, player, settings) {
     withdrawalFeeCents: fee.feeCents, realEnabled: !!settings.realEnabled && !!settings.casinoWallet,
     depositsOpen: !!settings.depositsOpen && !!settings.casinoWallet, withdrawalsOpen: !!settings.withdrawalsOpen && !!settings.casinoWallet,
     hasDeposited: deposits.results.some((d) => d.status === 'credited'),
+    // When the newest top up that is not final yet arrived (UTC ISO), for the page's 'withdrawals open in about N minutes'.
+    withdrawPendingSince: pending?.since ? `${pending.since.replace(' ', 'T')}Z` : null,
     deposits: deposits.results.map((d) => ({ txHash: d.tx_hash, amountCents: d.amount_units, status: d.status, createdAt: d.created_at, creditedAt: d.credited_at })),
     withdrawals: withdrawals.results.map((w) => ({ id: w.id, amountCents: w.amount_units, feeCents: w.fee_units, sendCents: w.send_units, status: w.status, txHash: w.tx_hash, createdAt: w.created_at, sentAt: w.sent_at })),
   };
@@ -661,30 +665,31 @@ async function markFinal(env, row) {
 }
 async function flagDeposit(env, row) {
   const db = env.DB;
-  const claimed = await db.prepare("UPDATE chain_deposits SET review_at = datetime('now') WHERE id = ? AND review_at IS NULL").bind(row.id).run();
-  if ((claimed.meta?.changes ?? 0) !== 1) return;
+  // Pause and alert first, then mark it: a crash in between repeats them (both idempotent), never skips them.
+  // Once review_at is set this never runs again, so an owner who resumes the account is not overruled.
   if (row.player_id) await db.prepare("UPDATE players SET status = 'frozen' WHERE id = ? AND status = 'active'").bind(row.player_id).run();
   await raise(db, { type: 'tics_deposit_gone', severity: row.player_id ? 'critical' : 'warning', key: `tics_deposit_review:${row.id}`, playerId: row.player_id || null,
     title: `A deposit could not be found on Ethereum: ${formatTics(row.amount_units)}`,
-    details: `${row.tx_hash} from ${row.from_address} was not found although its block is final. No second provider confirmed it, so nothing was taken back.${row.player_id ? ` The account ${row.player_id} is paused and this money cannot be withdrawn. Check the transaction on Etherscan.` : ''}` }).run();
+    details: `${row.tx_hash} from ${row.from_address} was not found although its block is final. No second provider confirmed it, so nothing was taken back.${row.player_id ? ` The account ${row.player_id} is paused and it cannot withdraw. Check the transaction on Etherscan.` : ''}` }).run();
+  await db.prepare("UPDATE chain_deposits SET review_at = datetime('now') WHERE id = ? AND review_at IS NULL").bind(row.id).run();
 }
 async function reverseDeposit(env, id) {
   const db = env.DB;
   const row = await db.prepare('SELECT * FROM chain_deposits WHERE id = ?').bind(id).first(); // fresh: an admin may have just assigned it
   if (!row || row.reversed_at) return;
-  let result = { reversedCents: 0, shortCents: 0, duplicate: true };
-  // Always ask the wallet when a player is linked: it knows whether it credited this ref (and closes it if not).
-  if (row.player_id) result = await walletOp(env, row.player_id, 'tics-deposit-reverse', { ref: depositRef(row), amountCents: row.amount_units });
+  // Always ask the wallet when a player is linked: it knows whether it credited this ref (and closes it if
+  // not). It returns the same amounts on a retry, so every step below also runs after a lost reply.
+  const result = row.player_id ? await walletOp(env, row.player_id, 'tics-deposit-reverse', { ref: depositRef(row), amountCents: row.amount_units }) : { reversedCents: 0, shortCents: 0 };
   const taken = result.reversedCents > 0 || result.shortCents > 0;
+  // Pause and alert BEFORE the row is marked done: a crash in between repeats them (both idempotent), never skips them.
   if (row.player_id && taken) await db.prepare("UPDATE players SET status = 'frozen' WHERE id = ? AND status = 'active'").bind(row.player_id).run();
-  await db.prepare("UPDATE chain_deposits SET reversed_at = datetime('now'), note = ? WHERE id = ? AND reversed_at IS NULL")
-    .bind(`gone from the chain after its block was final${taken ? `; ${formatTics(result.reversedCents)} taken back` : ''}`.slice(0, 200), row.id).run();
-  if (result.duplicate && row.player_id) return;
   await raise(db, { type: 'tics_deposit_gone', severity: taken ? 'critical' : 'warning', key: `tics_deposit_gone:${row.id}`, playerId: row.player_id || null,
     title: `A deposit disappeared from the chain: ${formatTics(row.amount_units)}`,
     details: `${row.tx_hash} from ${row.from_address} is not on Ethereum any more although its block was final (two providers agree). ${taken
       ? `The credit was taken back (${formatTics(result.reversedCents)}${result.shortCents > 0 ? `; ${formatTics(result.shortCents)} could not be taken back because it was already played or withdrawn` : ''}) and the account ${row.player_id} is paused. Check the transaction on Etherscan before resuming it.`
       : 'It was never credited, and it can no longer be credited or assigned.'}` }).run();
+  await db.prepare("UPDATE chain_deposits SET reversed_at = datetime('now'), note = ? WHERE id = ? AND reversed_at IS NULL")
+    .bind(`gone from the chain after its block was final${taken ? `; ${formatTics(result.reversedCents)} taken back` : ''}`.slice(0, 200), row.id).run();
 }
 
 // ---------- withdrawals ----------

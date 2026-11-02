@@ -33,6 +33,7 @@ const ROBOTS = 'noindex, nofollow, noarchive';
 // Set by the platform Worker only; any copy sent by a browser is stripped.
 const CONTEXT_HEADER = 'X-Platform-Context';
 const INTERNAL_HEADER = 'X-Internal-Secret';
+export const WITHDRAW_WAIT_MESSAGE = 'Your latest top up is still being confirmed on Ethereum. You can withdraw about 15 minutes after it arrived.';
 const STATUS_MESSAGES = {
   frozen: 'Your account is paused. Please contact support.',
   banned: 'This account has been closed.',
@@ -518,6 +519,9 @@ export class DemoCasino {
     // the central copy yet; 'flushed' = it is; 'void' = asked about before the spin ever ran, so it never will.
     // Credited top ups whose block Ethereum has not finalized yet (final = 0): played freely, never withdrawn.
     this.sql.exec(`CREATE TABLE IF NOT EXISTS tics_finality (ref TEXT PRIMARY KEY, units INTEGER NOT NULL DEFAULT 0, final INTEGER NOT NULL DEFAULT 0 CHECK (final IN (0, 1)))`);
+    // Each reversal of a vanished top up and what it took back (returned again on a retry).
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS tics_reversals (ref TEXT PRIMARY KEY, reversed_cents INTEGER NOT NULL, short_cents INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS spin_hold_marks (hold_id TEXT PRIMARY KEY, state TEXT NOT NULL CHECK (state IN ('pending', 'flushed', 'void')),
       created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
     // Real money is a separate balance; play money stays in users.balance_cents.
@@ -658,9 +662,9 @@ export class DemoCasino {
           // Never pay out from a balance that does not match its own ledger.
           if (!this.ticsReconciled()) fail(409, 'balance check failed');
           if (current < body.amountCents) fail(402, 'not enough real balance');
-          // Money from a top up that Ethereum has not finalized yet stays here (re-audit R2).
-          const keep = this.one('SELECT COALESCE(SUM(units), 0) AS n FROM tics_finality WHERE final = 0').n;
-          if (current - keep < body.amountCents) fail(402, `${formatTics(Math.min(keep, current))} from your latest top up can be withdrawn about 15 minutes after it arrived, once Ethereum has confirmed it for good. You can withdraw up to ${formatTics(Math.max(0, current - keep))} now.`);
+          // No withdrawal at all while a top up is not final on Ethereum yet (re-audit R2, verification F1):
+          // the top up AND anything won with it stay here until it is confirmed for good.
+          if (this.one('SELECT COUNT(*) AS n FROM tics_finality WHERE final = 0 AND units > 0').n > 0) fail(402, WITHDRAW_WAIT_MESSAGE);
           this.setTics(current - body.amountCents, 'withdrawal_hold', -body.amountCents, { ref: body.ref });
           this.sql.exec("INSERT INTO holds (ref, units, status) VALUES (?, ?, 'held')", body.ref, body.amountCents);
         }
@@ -676,20 +680,22 @@ export class DemoCasino {
         // A credited top up whose transfer is gone from the chain (re-audit R2). Takes back what the
         // balance still has, never below zero, with its own ledger row; once per deposit.
         if (!body.ref.startsWith('td:') || !Number.isSafeInteger(body.amountCents) || body.amountCents <= 0) fail(400, 'invalid reversal');
-        const rref = `rv:${body.ref.slice(3)}`;
-        const done = this.one('SELECT ref FROM processed_payments WHERE ref = ?', rref);
-        if (done) return { duplicate: true, reversedCents: 0, shortCents: 0, realTicsCents: this.ticsBalance() };
+        // The result is stored with the balance change, so a retry after a lost reply gets the SAME amounts
+        // back (verification F2) and the caller can still pause the account and alert.
+        const done = this.one('SELECT reversed_cents, short_cents FROM tics_reversals WHERE ref = ?', body.ref);
+        if (done) return { duplicate: true, reversedCents: done.reversed_cents, shortCents: done.short_cents, realTicsCents: this.ticsBalance() };
+        let take = 0, short = 0;
         if (!this.one('SELECT ref FROM processed_payments WHERE ref = ?', body.ref)) {
           // Never credited here: close the ref so a credit still on its way is answered as a duplicate.
           this.sql.exec('INSERT OR IGNORE INTO processed_payments (ref) VALUES (?)', body.ref);
-          this.sql.exec('INSERT INTO processed_payments (ref) VALUES (?)', rref);
-          return { duplicate: false, reversedCents: 0, shortCents: 0, realTicsCents: this.ticsBalance() };
+        } else {
+          const current = this.ticsBalance();
+          take = Math.min(current, body.amountCents); short = body.amountCents - take;
+          if (take > 0) this.setTics(current - take, 'deposit_reversal', -take, { ref: body.ref, reason: 'transfer gone from the chain', shortCents: short });
         }
-        const current = this.ticsBalance(), take = Math.min(current, body.amountCents);
-        if (take > 0) this.setTics(current - take, 'deposit_reversal', -take, { ref: body.ref, reason: 'transfer gone from the chain', shortCents: body.amountCents - take });
-        this.sql.exec('INSERT INTO processed_payments (ref) VALUES (?)', rref);
+        this.sql.exec('INSERT INTO tics_reversals (ref, reversed_cents, short_cents) VALUES (?, ?, ?)', body.ref, take, short);
         this.sql.exec('INSERT INTO tics_finality (ref, units, final) VALUES (?, 0, 1) ON CONFLICT(ref) DO UPDATE SET units = 0, final = 1', body.ref);
-        return { duplicate: false, reversedCents: take, shortCents: body.amountCents - take, realTicsCents: this.ticsBalance() };
+        return { duplicate: false, reversedCents: take, shortCents: short, realTicsCents: this.ticsBalance() };
       }
       const hold = this.one('SELECT * FROM holds WHERE ref = ?', body.ref);
       // Read-only: lets the payouts Worker confirm a withdrawal's money is really held before it signs.

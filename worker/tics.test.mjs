@@ -8,6 +8,7 @@ import { encodeAbiParameters, pad } from 'viem';
 import worker, { DemoCasino } from './index.js';
 import { clearConfigCache } from './platform.js';
 import { createD1 } from '../test-support/d1shim.mjs';
+import { deriveOutcome } from '../backend/src/core/fairness.js';
 import { weiToUnits, unitsToWei, formatTics, normAddress, OFFICIAL_TICS, TRANSFER_TOPIC, decodeTransfers, rpcClient } from './tics.js';
 import { chainTick, parseHoldings, refreshHoldings, HOLDINGS_DAILY_CAP, sweepSpinHolds, liveFloat, reserveSpinExposure, HOLD_ALERT_AFTER_MS, finalizeDeposits, FINAL_MISS_CONFIRM_MS } from './wallet.js';
 
@@ -1416,5 +1417,113 @@ test('R1 review fix: bookings that stay open do not hide newer ones from the cro
     for (let i = 0; i < 3 && !released; i++) { await sweepSpinHolds(p.env, now + i * 60_000); released = !p.rows("SELECT 1 FROM spin_holds WHERE id = 'newer'").length; }
     assert.ok(released, 'the newer booking was checked and released');
     p.env.CASINO.get = real;
+  } finally { p.restore(); }
+});
+
+test('verification F1: winnings made with a top up that is not final cannot be withdrawn either', async () => {
+  const p = platform();
+  try {
+    p.chain.finalized = 980;
+    const a = await funded(p, 5000n, 1_000_000n);
+    const obj = p.env.CASINO.get(a.address);
+    // Pick the winning pocket with the fixture's own server seed, only to make a sure win in the test.
+    const c = (await p.call('/api/fairness/commitment', { cookie: a.cookie })).data;
+    const entropy = randomBytes(32).toString('hex');
+    const cur = obj.commitment();
+    const pocket = deriveOutcome(cur.server_seed, `${cur.client_seed}:${entropy}`, cur.nonce, 37);
+    const r = await p.call('/api/games/roulette/spin', { cookie: a.cookie, body: { bets: [{ type: 'straight', value: pocket, amountCents: 100_000 }], requestId: randomUUID(), expectedCommitment: c, clientEntropy: entropy, mode: 'real' } });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.equal(r.data.balanceAfterCents, 4_000_000, '5,000 top up, 1,000 straight bet won: 40,000 $TICS');
+    // The auditor's request: 35,000 $TICS of winnings while the top up is not final. Refused, nothing held.
+    const w = await a.wd(3_500_000);
+    assert.equal(w.status, 402);
+    assert.equal(w.data.error, 'Your latest top up is still being confirmed on Ethereum. You can withdraw about 15 minutes after it arrived.');
+    assert.equal(p.rows('SELECT COUNT(*) AS n FROM chain_withdrawals')[0].n, 0);
+    assert.equal(await realOf(p, a.cookie), 4_000_000);
+    // The page knows when the top up arrived, to show 'withdrawals open in about N minutes'.
+    const me = (await p.call('/api/wallet/me', { cookie: a.cookie })).data;
+    assert.match(me.withdrawPendingSince, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
+    // Once it is final, everything can be withdrawn and the page stops waiting.
+    p.chain.finalized = 1000;
+    await chainTick(p.env, { rpc: p.chain.rpc });
+    assert.equal((await p.call('/api/wallet/me', { cookie: a.cookie })).data.withdrawPendingSince, null);
+    assert.equal((await a.wd(3_500_000)).status, 200);
+  } finally { p.restore(); }
+});
+
+test('verification F1: a second top up blocks withdrawing older money until it is final too', async () => {
+  const p = platform();
+  try {
+    const a = await funded(p, 5000n);
+    p.chain.finalized = 1000; // the first top up (block 990) is final
+    await chainTick(p.env, { rpc: p.chain.rpc });
+    p.chain.block = 1030;
+    p.chain.transfer({ from: a.address, wei: 1000n * 10n ** 18n, block: 1012 });
+    await chainTick(p.env, { rpc: p.chain.rpc });
+    await chainTick(p.env, { rpc: p.chain.rpc });
+    assert.equal(await realOf(p, a.cookie), 600_000);
+    assert.equal((await a.wd(100_000)).status, 402, 'nothing while the newest top up is not final');
+    p.chain.finalized = 1020;
+    await chainTick(p.env, { rpc: p.chain.rpc });
+    assert.equal((await a.wd(100_000)).status, 200);
+  } finally { p.restore(); }
+});
+
+test('verification F2: a reversal whose reply is lost still pauses the account and alerts on the retry', async () => {
+  const p = platform();
+  try {
+    p.chain.finalized = 980;
+    const a = await funded(p, 5000n);
+    const [dep] = p.rows('SELECT * FROM chain_deposits WHERE player_id = ?', a.address);
+    p.chain.receipts.delete(dep.tx_hash);
+    p.chain.finalized = 1000;
+    const settings = JSON.parse(p.rows("SELECT value FROM settings WHERE key = 'tics_payments'")[0].value);
+    const gone = async (m, prm) => (m === 'eth_getTransactionReceipt' ? null : p.chain.rpc(m, prm));
+    const t0 = Date.now();
+    await finalizeDeposits(p.env, settings, p.chain.rpc, { rpc2: gone, now: t0 });
+    // The wallet takes the money back, then its reply is lost.
+    const obj = p.env.CASINO.get(a.address); const orig = obj.fetch.bind(obj);
+    obj.fetch = async (req) => { const res = await orig(req); if (new URL(req.url).pathname === '/internal/tics-deposit-reverse') throw new Error('reply lost'); return res; };
+    await finalizeDeposits(p.env, settings, p.chain.rpc, { rpc2: gone, now: t0 + 2 * FINAL_MISS_CONFIRM_MS });
+    assert.equal(await realOf(p, a.cookie), 0, 'taken back once');
+    assert.equal(p.rows('SELECT reversed_at FROM chain_deposits WHERE id = ?', dep.id)[0].reversed_at, null, 'not marked done yet');
+    // Next run: same amounts come back, so the pause and the critical alert happen.
+    obj.fetch = orig;
+    await finalizeDeposits(p.env, settings, p.chain.rpc, { rpc2: gone, now: t0 + 3 * FINAL_MISS_CONFIRM_MS });
+    assert.ok(p.rows('SELECT reversed_at FROM chain_deposits WHERE id = ?', dep.id)[0].reversed_at);
+    assert.equal(p.rows('SELECT status FROM players WHERE id = ?', a.address)[0].status, 'frozen');
+    const [alert] = p.rows("SELECT severity, details FROM alerts WHERE dedupe_key = ?", `tics_deposit_gone:${dep.id}`);
+    assert.equal(alert.severity, 'critical');
+    assert.match(alert.details, /5,000.00 \$TICS/);
+    assert.equal(p.rows("SELECT COUNT(*) AS n FROM ledger WHERE type = 'deposit_reversal'")[0].n, 1, 'never taken twice');
+    assert.equal(await realOf(p, a.cookie), 0);
+    // An owner resumes the account after checking: later runs leave it alone.
+    p.DB.raw.prepare("UPDATE players SET status = 'active' WHERE id = ?").run(a.address);
+    await finalizeDeposits(p.env, settings, p.chain.rpc, { rpc2: gone, now: t0 + 5 * FINAL_MISS_CONFIRM_MS });
+    assert.equal(p.rows('SELECT status FROM players WHERE id = ?', a.address)[0].status, 'active');
+  } finally { p.restore(); }
+});
+
+test('verification F2: review without a second provider pauses and alerts even if it crashes half way', async () => {
+  const p = platform();
+  try {
+    p.chain.finalized = 980;
+    const a = await funded(p, 5000n);
+    const [dep] = p.rows('SELECT * FROM chain_deposits WHERE player_id = ?', a.address);
+    p.chain.receipts.delete(dep.tx_hash);
+    p.chain.finalized = 1000;
+    const settings = JSON.parse(p.rows("SELECT value FROM settings WHERE key = 'tics_payments'")[0].value);
+    const t0 = Date.now();
+    await finalizeDeposits(p.env, settings, p.chain.rpc, { now: t0 });
+    // The database write that marks the review fails once (after the pause and the alert).
+    const prep = p.DB.prepare; let failed = false;
+    p.DB.prepare = (q) => { if (!failed && /SET review_at/.test(q)) { failed = true; return { bind: () => ({ run: async () => { throw new Error('D1 down'); } }) }; } return prep(q); };
+    await finalizeDeposits(p.env, settings, p.chain.rpc, { now: t0 + 2 * FINAL_MISS_CONFIRM_MS });
+    p.DB.prepare = prep;
+    assert.equal(p.rows('SELECT status FROM players WHERE id = ?', a.address)[0].status, 'frozen');
+    assert.equal(p.rows("SELECT COUNT(*) AS n FROM alerts WHERE dedupe_key = ?", `tics_deposit_review:${dep.id}`)[0].n, 1);
+    await finalizeDeposits(p.env, settings, p.chain.rpc, { now: t0 + 3 * FINAL_MISS_CONFIRM_MS });
+    assert.ok(p.rows('SELECT review_at FROM chain_deposits WHERE id = ?', dep.id)[0].review_at, 'marked on the retry');
+    assert.equal(await realOf(p, a.cookie), 500_000, 'nothing taken back without a second provider');
   } finally { p.restore(); }
 });
