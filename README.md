@@ -72,7 +72,11 @@ npm run build && wrangler dev --port 8789
 Then open http://127.0.0.1:8789. Everything runs on your machine with play money; nothing touches the live site.
 `node scripts/fake-chain.mjs 8545` starts a fake Ethereum node for testing deposits and payouts locally.
 
-The dealer voices and sound effects are not included in this repository, so a local build plays without sound.
+## Dealer voices and sound effects
+
+The dealer voices (`frontend/public/voice/`) and sound effects (`frontend/public/sfx/`) are included so the
+game builds exactly as it runs on betics.io. They are for qu-BETICS only. If you fork or copy this code,
+do not use them: remove both folders and use your own audio.
 
 ## Licence
 
