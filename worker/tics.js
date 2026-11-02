@@ -66,16 +66,40 @@ export function formatTics(units) {
 }
 
 // Minimal JSON-RPC client; fetchImpl is injectable for tests.
-export function rpcClient(url, fetchImpl = fetch) {
-  let id = 0;
-  return async function rpc(method, params = []) {
-    if (!url) throw new Error('Ethereum RPC is not configured');
-    const res = await fetchImpl(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: ++id, method, params }) });
-    const body = await res.json().catch(() => null);
+// Every call has a deadline (a node that never answers must not hold the payout queue or a cron run).
+// The error says "timed out", which every caller treats as an outage (unclear), never as a clear refusal.
+// fallbackUrl (optional, a second independent provider): used only if the FIRST call of this client
+// fails with an outage, and then for every later call of the client. A switch half way is never made:
+// a deposit scan that read the block height from one node and the logs from another (a node a block or
+// two behind) could skip transfers, so a later failure just fails this run and the next run starts over.
+export const RPC_TIMEOUT_MS = 20_000;
+export function rpcClient(url, fetchImpl = fetch, { fallbackUrl = null, timeoutMs = RPC_TIMEOUT_MS } = {}) {
+  let id = 0, active = null;
+  const call = async (target, method, params) => {
+    if (!target) throw new Error('Ethereum RPC is not configured');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
+    let res, body;
+    try {
+      res = await fetchImpl(target, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: ++id, method, params }), signal: controller.signal });
+      body = await res.json().catch(() => null);
+    } catch (error) {
+      if (controller.signal.aborted) { const e = new Error(`RPC ${method} timed out after ${Math.round(timeoutMs / 1000)} s`); e.outage = true; throw e; }
+      error.outage = true; throw error;
+    } finally { clearTimeout(timer); }
     // The provider's own error text (never contains the key) makes limits like Alchemy's 10-block log range visible in the logs.
-    if (!res.ok || !body) throw new Error(`RPC ${method} failed with HTTP ${res.status}${body?.error?.message ? `: ${String(body.error.message).slice(0, 200)}` : ''}`);
+    if (!res.ok || !body) { const e = new Error(`RPC ${method} failed with HTTP ${res.status}${body?.error?.message ? `: ${String(body.error.message).slice(0, 200)}` : ''}`); e.outage = res.status === 429 || res.status >= 500 || !body; throw e; }
     if (body.error) { const e = new Error(`RPC ${method}: ${body.error.message || 'error'}`); e.rpc = body.error; throw e; }
     return body.result;
+  };
+  return async function rpc(method, params = []) {
+    if (active) return call(active, method, params);
+    try { const result = await call(url, method, params); active = url; return result; } catch (error) {
+      if (!fallbackUrl || !url || !error.outage) throw error;
+      const result = await call(fallbackUrl, method, params);
+      active = fallbackUrl;
+      return result;
+    }
   };
 }
 export function rpcUrl(env, chainId) {

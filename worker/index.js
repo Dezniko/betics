@@ -290,7 +290,7 @@ async function walletRoutes(request, env, ctx, url, meta, text, walletPlayer) {
     await rateLimit(db, 'check', meta.ipHash);
     if (!settings.casinoWallet || !rpcUrl(env, settings.chainId)) fail(503, 'Deposits are not open right now.');
     const body = parseBody(text);
-    return json(await checkDepositTx(env, settings, rpcClient(rpcUrl(env, settings.chainId)), typeof body.txHash === 'string' ? body.txHash.toLowerCase() : ''));
+    return json(await checkDepositTx(env, settings, rpcClient(rpcUrl(env, settings.chainId), fetch, { fallbackUrl: env.ETH_RPC_URL_2 || null }), typeof body.txHash === 'string' ? body.txHash.toLowerCase() : ''));
   }
   if (path === '/api/wallet/withdraw/quote' && method === 'GET') {
     const q = await withdrawalFee(db, settings);

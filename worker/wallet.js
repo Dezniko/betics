@@ -490,7 +490,7 @@ export async function chainTick(env, deps = {}) {
   await settleHoldingRows(env).catch((e) => console.error('holding sweep failed', e));
   const settings = await ticsSettings(env.DB);
   if (!settings.casinoWallet) return { skipped: 'no casino wallet' };
-  const rpc = deps.rpc || rpcClient(rpcUrl(env, settings.chainId), deps.fetch);
+  const rpc = deps.rpc || rpcClient(rpcUrl(env, settings.chainId), deps.fetch, { fallbackUrl: env.ETH_RPC_URL_2 || null });
   if (!rpcUrl(env, settings.chainId) && !deps.rpc) return { skipped: 'no rpc' };
   // A failing deposit scan must not stop the casino wallet snapshot: spins rely on it being fresh.
   let scanError = null;
@@ -530,7 +530,7 @@ export async function refreshPrices(env, settings, fetchImpl = fetch, now = Date
   if (settings.chainId !== 1) return null;
   const prev = await getState(env.DB, 'prices');
   if (prev && now - prev.at < PRICE_EVERY_MS) return prev;
-  const getJson = async (url) => { const res = await fetchImpl(url, { headers: { accept: 'application/json' } }); return res.ok ? res.json() : null; };
+  const getJson = async (url) => { const res = await fetchImpl(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(15_000) }); return res.ok ? res.json() : null; };
   let out = null;
   try {
     const id = settings.priceId || 'qubetics';
@@ -681,7 +681,7 @@ export async function refreshHoldings(env, player, { force = false, fetchImpl = 
   const rows = [];
   let pageKey;
   for (let page = 0; page < 5; page++) {
-    const res = await fetchImpl(`https://api.g.alchemy.com/data/v1/${env.ALCHEMY_API_KEY}/assets/tokens/by-address`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    const res = await fetchImpl(`https://api.g.alchemy.com/data/v1/${env.ALCHEMY_API_KEY}/assets/tokens/by-address`, { signal: AbortSignal.timeout(15_000), method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ addresses: [{ address: player.wallet_address, networks: NETWORKS }], withMetadata: true, withPrices: true, includeNativeTokens: true, ...(pageKey ? { pageKey } : {}) }) });
     if (!res.ok) throw new Error(`holdings lookup failed: HTTP ${res.status}`);
     const body = await res.json();

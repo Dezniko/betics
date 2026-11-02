@@ -8,7 +8,7 @@ import { encodeAbiParameters, pad } from 'viem';
 import worker, { DemoCasino } from './index.js';
 import { clearConfigCache } from './platform.js';
 import { createD1 } from '../test-support/d1shim.mjs';
-import { weiToUnits, unitsToWei, formatTics, normAddress, OFFICIAL_TICS, TRANSFER_TOPIC, decodeTransfers } from './tics.js';
+import { weiToUnits, unitsToWei, formatTics, normAddress, OFFICIAL_TICS, TRANSFER_TOPIC, decodeTransfers, rpcClient } from './tics.js';
 import { chainTick, parseHoldings, refreshHoldings, HOLDINGS_DAILY_CAP } from './wallet.js';
 
 const MIGRATIONS = ['0001_platform.sql', '0002_payments.sql', '0003_tics.sql', '0004_spin_holds.sql', '0005_audit_fixes.sql', '0006_admin.sql', '0007_r3.sql'].map((f) => new URL(`../migrations/${f}`, import.meta.url).pathname);
@@ -1113,4 +1113,29 @@ test('alchemy budget: holdings are looked up only for wallets that deposited, an
   calls = 0;
   await refreshHoldings(env, many[0], { fetchImpl, now: now + 86400000, force: true });
   assert.equal(calls, 1);
+});
+
+test('R4 provider calls: a node that never answers times out, and a tick can switch to the second provider only at its start', async () => {
+  // Never answers, but honours the abort signal like real fetch does.
+  const hang = (url, init) => new Promise((_, reject) => init.signal?.addEventListener('abort', () => reject(init.signal.reason)));
+  const t0 = Date.now();
+  await assert.rejects(rpcClient('https://a.test', hang, { timeoutMs: 50 })('eth_blockNumber'), /timed out/);
+  assert.ok(Date.now() - t0 < 2000, 'gave up quickly');
+  // Primary down at the start: the whole tick uses the second provider.
+  const calls = [];
+  const fetchFor = (down) => async (url, init) => { const { id, method } = JSON.parse(init.body); calls.push(`${url} ${method}`);
+    if (down.has(url)) return new Response('bad gateway', { status: 502 }); return Response.json({ jsonrpc: '2.0', id, result: url === 'https://a.test' ? '0xa' : '0xb' }); };
+  let rpc = rpcClient('https://a.test', fetchFor(new Set(['https://a.test'])), { fallbackUrl: 'https://b.test' });
+  assert.equal(await rpc('eth_blockNumber'), '0xb');
+  assert.equal(await rpc('eth_getLogs', [{}]), '0xb');
+  assert.deepEqual(calls.filter((c) => c.startsWith('https://a.test')), ['https://a.test eth_blockNumber'], 'stuck with the second provider');
+  // Primary fails half way: no switch (a lagging second node could make the scan skip blocks), the tick stops.
+  const down = new Set();
+  rpc = rpcClient('https://a.test', fetchFor(down), { fallbackUrl: 'https://b.test' });
+  assert.equal(await rpc('eth_blockNumber'), '0xa');
+  down.add('https://a.test');
+  await assert.rejects(rpc('eth_getLogs', [{}]), /HTTP 502/);
+  // A provider's own error answer (not an outage) is never retried elsewhere.
+  rpc = rpcClient('https://a.test', async (url, init) => Response.json({ jsonrpc: '2.0', id: 1, error: { message: 'execution reverted' } }), { fallbackUrl: 'https://b.test' });
+  await assert.rejects(rpc('eth_call', [{}]), /execution reverted/);
 });
