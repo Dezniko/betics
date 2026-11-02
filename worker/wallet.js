@@ -134,13 +134,11 @@ export async function revokeWalletSession(db, token) {
 
 // ---------- profile ----------
 export async function profile(db, player, settings) {
-  const [email, deposits, withdrawals, fee, pending] = await Promise.all([
+  const [email, deposits, withdrawals, fee] = await Promise.all([
     db.prepare("SELECT value, consent FROM player_identities WHERE player_id = ? AND kind = 'email' ORDER BY created_at DESC LIMIT 1").bind(player.id).first(),
     db.prepare("SELECT tx_hash, amount_units, status, created_at, credited_at FROM chain_deposits WHERE player_id = ? OR from_address = ? ORDER BY created_at DESC LIMIT 20").bind(player.id, player.id).all(),
     db.prepare("SELECT id, amount_units, fee_units, send_units, status, tx_hash, created_at, sent_at FROM chain_withdrawals WHERE player_id = ? AND kind = 'player' ORDER BY created_at DESC LIMIT 20").bind(player.id).all(),
     withdrawalFee(db, settings),
-    db.prepare(`SELECT MAX(credited_at) AS since FROM chain_deposits WHERE finalized_at IS NULL AND reversed_at IS NULL AND review_at IS NULL
-      AND player_id = ? AND status IN ('credited', 'assigned') AND credited_at IS NOT NULL`).bind(player.id).first(),
   ]);
   return {
     address: checksum(player.wallet_address), firstConnectedAt: player.first_connected_at, termsAcceptedAt: player.terms_accepted_at,
@@ -150,8 +148,6 @@ export async function profile(db, player, settings) {
     withdrawalFeeCents: fee.feeCents, realEnabled: !!settings.realEnabled && !!settings.casinoWallet,
     depositsOpen: !!settings.depositsOpen && !!settings.casinoWallet, withdrawalsOpen: !!settings.withdrawalsOpen && !!settings.casinoWallet,
     hasDeposited: deposits.results.some((d) => d.status === 'credited'),
-    // When the newest top up that is not final yet arrived (UTC ISO), for the page's 'withdrawals open in about N minutes'.
-    withdrawPendingSince: pending?.since ? `${pending.since.replace(' ', 'T')}Z` : null,
     deposits: deposits.results.map((d) => ({ txHash: d.tx_hash, amountCents: d.amount_units, status: d.status, createdAt: d.created_at, creditedAt: d.credited_at })),
     withdrawals: withdrawals.results.map((w) => ({ id: w.id, amountCents: w.amount_units, feeCents: w.fee_units, sendCents: w.send_units, status: w.status, txHash: w.tx_hash, createdAt: w.created_at, sentAt: w.sent_at })),
   };
@@ -656,11 +652,20 @@ export async function finalizeDeposits(env, settings, rpc, { rpc2 = null, rpc2Ur
   }
   return out;
 }
-async function markFinal(env, row) {
-  // The wallet must know first: only then may its money be withdrawn.
-  if (row.player_id && ['credited', 'assigned'].includes(row.status)) await walletOp(env, row.player_id, 'tics-deposit-final', { ref: depositRef(row) });
-  await env.DB.prepare("UPDATE chain_deposits SET finalized_at = datetime('now'), final_miss_at = NULL WHERE id = ? AND finalized_at IS NULL").bind(row.id).run();
-  if (row.review_at) await raise(env.DB, { type: 'tics_deposit_found', severity: 'info', key: `tics_deposit_found:${row.id}`, playerId: row.player_id || null,
+async function markFinal(env, seen) {
+  const db = env.DB;
+  // Fresh read: an admin may have just assigned it. The final write below only lands if the row is still
+  // as read, so a deposit assigned in between is finished on the next run, after its wallet knows.
+  const row = await db.prepare('SELECT * FROM chain_deposits WHERE id = ?').bind(seen.id).first();
+  if (!row || row.finalized_at || row.reversed_at) return;
+  if (row.player_id && ['credited', 'assigned'].includes(row.status)) {
+    const r = await walletOp(env, row.player_id, 'tics-deposit-final', { ref: depositRef(row) });
+    // The wallet already took it back (that reply was lost): finish the reversal, never call it final.
+    if (r.reversed) { await finishReversal(env, row, r); return; }
+  }
+  await db.prepare(`UPDATE chain_deposits SET finalized_at = datetime('now'), final_miss_at = NULL
+    WHERE id = ? AND finalized_at IS NULL AND reversed_at IS NULL AND status = ? AND player_id IS ?`).bind(row.id, row.status, row.player_id ?? null).run();
+  if (row.review_at) await raise(db, { type: 'tics_deposit_found', severity: 'info', key: `tics_deposit_found:${row.id}`, playerId: row.player_id || null,
     title: 'A deposit under review was found on Ethereum', details: `${row.tx_hash} is in a final block after all. It is final now. The account ${row.player_id || ''} stays paused until an owner resumes it.` }).run();
 }
 async function flagDeposit(env, row) {
@@ -676,20 +681,26 @@ async function flagDeposit(env, row) {
 async function reverseDeposit(env, id) {
   const db = env.DB;
   const row = await db.prepare('SELECT * FROM chain_deposits WHERE id = ?').bind(id).first(); // fresh: an admin may have just assigned it
-  if (!row || row.reversed_at) return;
+  if (!row || row.reversed_at || row.finalized_at) return;
   // Always ask the wallet when a player is linked: it knows whether it credited this ref (and closes it if
   // not). It returns the same amounts on a retry, so every step below also runs after a lost reply.
   const result = row.player_id ? await walletOp(env, row.player_id, 'tics-deposit-reverse', { ref: depositRef(row), amountCents: row.amount_units }) : { reversedCents: 0, shortCents: 0 };
+  await finishReversal(env, row, result);
+}
+async function finishReversal(env, row, result) {
+  const db = env.DB;
   const taken = result.reversedCents > 0 || result.shortCents > 0;
   // Pause and alert BEFORE the row is marked done: a crash in between repeats them (both idempotent), never skips them.
   if (row.player_id && taken) await db.prepare("UPDATE players SET status = 'frozen' WHERE id = ? AND status = 'active'").bind(row.player_id).run();
-  await raise(db, { type: 'tics_deposit_gone', severity: taken ? 'critical' : 'warning', key: `tics_deposit_gone:${row.id}`, playerId: row.player_id || null,
+  const left = taken && Number.isSafeInteger(result.realTicsCents) ? ` The balance left after it is ${formatTics(result.realTicsCents)}; winnings made with it since the top up are part of that.` : '';
+  await raise(db, { type: 'tics_deposit_gone', severity: row.player_id ? 'critical' : 'warning', key: `tics_deposit_gone:${row.player_id ? 'player' : 'unmatched'}:${row.id}`, playerId: row.player_id || null,
     title: `A deposit disappeared from the chain: ${formatTics(row.amount_units)}`,
     details: `${row.tx_hash} from ${row.from_address} is not on Ethereum any more although its block was final (two providers agree). ${taken
-      ? `The credit was taken back (${formatTics(result.reversedCents)}${result.shortCents > 0 ? `; ${formatTics(result.shortCents)} could not be taken back because it was already played or withdrawn` : ''}) and the account ${row.player_id} is paused. Check the transaction on Etherscan before resuming it.`
-      : 'It was never credited, and it can no longer be credited or assigned.'}` }).run();
-  await db.prepare("UPDATE chain_deposits SET reversed_at = datetime('now'), note = ? WHERE id = ? AND reversed_at IS NULL")
-    .bind(`gone from the chain after its block was final${taken ? `; ${formatTics(result.reversedCents)} taken back` : ''}`.slice(0, 200), row.id).run();
+      ? `The credit was taken back (${formatTics(result.reversedCents)}${result.shortCents > 0 ? `; ${formatTics(result.shortCents)} could not be taken back because it was already played or withdrawn` : ''}) and the account ${row.player_id} is paused.${left} Check the transaction on Etherscan before resuming it.`
+      : row.player_id ? `It was never credited to ${row.player_id}, and it can no longer be credited.` : 'It was never credited, and it can no longer be credited or assigned.'}` }).run();
+  // Only if nobody assigned it meanwhile (an assigned row is reversed through the player's wallet next run).
+  await db.prepare(`UPDATE chain_deposits SET reversed_at = datetime('now'), note = ? WHERE id = ? AND reversed_at IS NULL AND status = ? AND player_id IS ?`)
+    .bind(`gone from the chain after its block was final${taken ? `; ${formatTics(result.reversedCents)} taken back` : ''}`.slice(0, 200), row.id, row.status, row.player_id ?? null).run();
 }
 
 // ---------- withdrawals ----------

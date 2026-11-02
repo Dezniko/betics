@@ -520,6 +520,10 @@ export class DemoCasino {
     // the central copy yet; 'flushed' = it is; 'void' = asked about before the spin ever ran, so it never will.
     // Credited top ups whose block Ethereum has not finalized yet (final = 0): played freely, never withdrawn.
     this.sql.exec(`CREATE TABLE IF NOT EXISTS tics_finality (ref TEXT PRIMARY KEY, units INTEGER NOT NULL DEFAULT 0, final INTEGER NOT NULL DEFAULT 0 CHECK (final IN (0, 1)))`);
+    if (!this.sql.exec('PRAGMA table_info(tics_finality)').toArray().some((c) => c.name === 'credited_at')) {
+      this.sql.exec('ALTER TABLE tics_finality ADD COLUMN credited_at TEXT');
+      this.sql.exec("UPDATE tics_finality SET credited_at = datetime('now') WHERE credited_at IS NULL");
+    }
     // Each reversal of a vanished top up and what it took back (returned again on a retry).
     this.sql.exec(`CREATE TABLE IF NOT EXISTS tics_reversals (ref TEXT PRIMARY KEY, reversed_cents INTEGER NOT NULL, short_cents INTEGER NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
@@ -656,8 +660,8 @@ export class DemoCasino {
           if (!body.ref.startsWith('td:')) fail(400, 'invalid payment ref');
           this.setTics(current + body.amountCents, 'deposit', body.amountCents, { ref: body.ref, ...(body.note ? { note: String(body.note).slice(0, 200) } : {}) });
           // Not withdrawable until the cron has seen it in a final block (unless it already has).
-          this.sql.exec('INSERT INTO tics_finality (ref, units, final) VALUES (?, ?, ?) ON CONFLICT(ref) DO UPDATE SET units = excluded.units, final = MAX(final, excluded.final)',
-            body.ref, body.amountCents, final ? 1 : 0);
+          this.sql.exec(`INSERT INTO tics_finality (ref, units, final, credited_at) VALUES (?, ?, ?, datetime('now'))
+            ON CONFLICT(ref) DO UPDATE SET units = excluded.units, final = MAX(final, excluded.final), credited_at = excluded.credited_at`, body.ref, body.amountCents, final ? 1 : 0);
         } else {
           if (!body.ref.startsWith('th:')) fail(400, 'invalid payment ref');
           // Never pay out from a balance that does not match its own ledger.
@@ -674,6 +678,10 @@ export class DemoCasino {
       }
       if (kind === 'tics-deposit-final') {
         if (!body.ref.startsWith('td:')) fail(400, 'invalid payment ref');
+        // Already taken back (a reversal whose reply was lost, then the transfer was seen again): say so,
+        // so the caller finishes that reversal (pause and alert) instead of calling the deposit final.
+        const rev = this.reversalOf(body.ref);
+        if (rev) return { ok: false, reversed: true, ...rev };
         this.sql.exec('INSERT INTO tics_finality (ref, final) VALUES (?, 1) ON CONFLICT(ref) DO UPDATE SET final = 1', body.ref);
         return { ok: true };
       }
@@ -683,8 +691,8 @@ export class DemoCasino {
         if (!body.ref.startsWith('td:') || !Number.isSafeInteger(body.amountCents) || body.amountCents <= 0) fail(400, 'invalid reversal');
         // The result is stored with the balance change, so a retry after a lost reply gets the SAME amounts
         // back (verification F2) and the caller can still pause the account and alert.
-        const done = this.one('SELECT reversed_cents, short_cents FROM tics_reversals WHERE ref = ?', body.ref);
-        if (done) return { duplicate: true, reversedCents: done.reversed_cents, shortCents: done.short_cents, realTicsCents: this.ticsBalance() };
+        const done = this.reversalOf(body.ref);
+        if (done) return { duplicate: true, ...done, realTicsCents: this.ticsBalance() };
         let take = 0, short = 0;
         if (!this.one('SELECT ref FROM processed_payments WHERE ref = ?', body.ref)) {
           // Never credited here: close the ref so a credit still on its way is answered as a duplicate.
@@ -725,6 +733,15 @@ export class DemoCasino {
       }
       fail(404, 'demo endpoint not found');
     });
+  }
+  // A reversal already made for this deposit ref: from tics_reversals, or the marker the first version
+  // of this code wrote (processed_payments 'rv:<ref>', amounts read back from its ledger row).
+  reversalOf(ref) {
+    const row = this.one('SELECT reversed_cents, short_cents FROM tics_reversals WHERE ref = ?', ref);
+    if (row) return { reversedCents: row.reversed_cents, shortCents: row.short_cents };
+    if (!this.one('SELECT ref FROM processed_payments WHERE ref = ?', `rv:${ref.slice(3)}`)) return null;
+    const led = this.one("SELECT COALESCE(-SUM(amount_cents), 0) AS taken, MAX(COALESCE(json_extract(meta, '$.shortCents'), 0)) AS short FROM ledger WHERE type = 'deposit_reversal' AND json_extract(meta, '$.ref') = ?", ref);
+    return { reversedCents: led.taken || 0, shortCents: led.short || 0 };
   }
   // What this wallet knows about a spin booking. Unknown means the spin has not run here: it is closed
   // for good ('void'), so a spin request still on its way is refused and the booking can be released.
@@ -781,8 +798,11 @@ export class DemoCasino {
     const user = this.user();
     if (!user) fail(401, 'demo session required');
     const held = this.heldTics();
+    // The wallet is the authority on the withdrawal wait: when its newest top up that is not final arrived (UTC ISO).
+    const wait = this.one('SELECT MAX(credited_at) AS since FROM tics_finality WHERE final = 0 AND units > 0');
     return { balanceCents: user.balance_cents, realTicsCents: this.ticsBalance(),
-      pendingWithdrawals: held.n, heldCents: held.units, demoAllowed: this.demoAllowed(minStakeCents) };
+      pendingWithdrawals: held.n, heldCents: held.units, demoAllowed: this.demoAllowed(minStakeCents),
+      withdrawPendingSince: wait?.since ? `${wait.since.replace(' ', 'T')}Z` : null };
   }
   init(body, demoStart = DEMO_START_UNITS) {
     return this.ctx.storage.transactionSync(() => {

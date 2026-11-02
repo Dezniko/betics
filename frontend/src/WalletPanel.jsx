@@ -78,12 +78,13 @@ function Withdraw({ profile, wallet, onDone }) {
   }, [allowed]);
   // While the newest top up is not final yet: a note with an estimate, refreshed every 15 s, and no Withdraw.
   const [now, setNow] = useState(Date.now());
-  const waitText = withdrawWaitText(profile.withdrawPendingSince, now);
+  const pendingSince = wallet?.withdrawPendingSince || null; // the player's wallet decides, the page only shows it
+  const waitText = withdrawWaitText(pendingSince, now);
   useEffect(() => {
-    if (!profile.withdrawPendingSince) return;
+    if (!pendingSince) return;
     const t = setInterval(() => setNow(Date.now()), 15000);
     return () => clearInterval(t);
-  }, [profile.withdrawPendingSince]);
+  }, [pendingSince]);
   const units = parseTicsInput(amount);
   const fee = quote ? (quote.feesEnabled === false ? 0 : quote.feeCents) : profile.withdrawalFeeCents || 0;
   const min = quote ? quote.minWithdrawalCents : profile.minWithdrawalCents;
@@ -224,7 +225,7 @@ export default function WalletPanel({ profile, wallet, mobile, deposit, onTopUp,
   const pending = profile.withdrawals.some((w) => ['queued', 'signing', 'sending'].includes(w.status));
   const refreshRef = useRef(onRefresh); refreshRef.current = onRefresh;
   // Also while a top up is not final yet, so the Withdraw tab opens as soon as it is confirmed.
-  const waiting = !!profile.withdrawPendingSince;
+  const waiting = !!wallet?.withdrawPendingSince;
   useEffect(() => {
     if (!pending && !waiting) return;
     const t = setInterval(() => refreshRef.current(), 10000);

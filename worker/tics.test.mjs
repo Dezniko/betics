@@ -1441,12 +1441,12 @@ test('verification F1: winnings made with a top up that is not final cannot be w
     assert.equal(p.rows('SELECT COUNT(*) AS n FROM chain_withdrawals')[0].n, 0);
     assert.equal(await realOf(p, a.cookie), 4_000_000);
     // The page knows when the top up arrived, to show 'withdrawals open in about N minutes'.
-    const me = (await p.call('/api/wallet/me', { cookie: a.cookie })).data;
+    const me = (await p.call('/api/wallet', { cookie: a.cookie })).data;
     assert.match(me.withdrawPendingSince, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
     // Once it is final, everything can be withdrawn and the page stops waiting.
     p.chain.finalized = 1000;
     await chainTick(p.env, { rpc: p.chain.rpc });
-    assert.equal((await p.call('/api/wallet/me', { cookie: a.cookie })).data.withdrawPendingSince, null);
+    assert.equal((await p.call('/api/wallet', { cookie: a.cookie })).data.withdrawPendingSince, null);
     assert.equal((await a.wd(3_500_000)).status, 200);
   } finally { p.restore(); }
 });
@@ -1492,7 +1492,7 @@ test('verification F2: a reversal whose reply is lost still pauses the account a
     await finalizeDeposits(p.env, settings, p.chain.rpc, { rpc2: gone, now: t0 + 3 * FINAL_MISS_CONFIRM_MS });
     assert.ok(p.rows('SELECT reversed_at FROM chain_deposits WHERE id = ?', dep.id)[0].reversed_at);
     assert.equal(p.rows('SELECT status FROM players WHERE id = ?', a.address)[0].status, 'frozen');
-    const [alert] = p.rows("SELECT severity, details FROM alerts WHERE dedupe_key = ?", `tics_deposit_gone:${dep.id}`);
+    const [alert] = p.rows("SELECT severity, details FROM alerts WHERE dedupe_key = ?", `tics_deposit_gone:player:${dep.id}`);
     assert.equal(alert.severity, 'critical');
     assert.match(alert.details, /5,000.00 \$TICS/);
     assert.equal(p.rows("SELECT COUNT(*) AS n FROM ledger WHERE type = 'deposit_reversal'")[0].n, 1, 'never taken twice');
@@ -1536,4 +1536,84 @@ test('the Worker entry module only exports handlers and classes (anything else s
       assert.equal(typeof value, 'function', `${dir} export ${name} is a ${typeof value}`);
     }
   }
+});
+
+test('verification review M1: a deposit assigned by an admin during the finality run still becomes final in the wallet', async () => {
+  const p = platform();
+  try {
+    const a = await funded(p, 5000n);
+    p.chain.finalized = 1000;
+    await chainTick(p.env, { rpc: p.chain.rpc }); // the first top up is final
+    // A transfer from an exchange wallet: unmatched.
+    p.chain.block = 1030;
+    const tx = p.chain.transfer({ from: '0x' + '9'.repeat(40), wei: 3000n * 10n ** 18n, block: 1012 });
+    await chainTick(p.env, { rpc: p.chain.rpc }); await chainTick(p.env, { rpc: p.chain.rpc });
+    const [row] = p.rows('SELECT * FROM chain_deposits WHERE tx_hash = ?', tx);
+    assert.equal(row.status, 'unmatched');
+    p.chain.finalized = 1020;
+    // The admin assigns it (claim, then wallet credit) exactly while the cron is checking it.
+    const assign = async () => {
+      p.DB.raw.prepare("UPDATE chain_deposits SET status = 'assigned', player_id = ?, note = 'exchange' WHERE id = ? AND status = 'unmatched'").run(a.address, row.id);
+      const r = await p.env.CASINO.get(a.address).fetch(new Request('https://wallet/internal/tics-deposit', { method: 'POST', headers: { 'X-Internal-Secret': 'test-secret', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ref: `td:1-${tx}-${row.log_index}`, amountCents: row.amount_units, playerId: a.address }) }));
+      assert.equal(r.status, 200);
+      p.DB.raw.prepare("UPDATE chain_deposits SET credited_at = datetime('now') WHERE id = ?").run(row.id);
+    };
+    let fired = false;
+    const racing = async (m, prm) => { if (m === 'eth_getTransactionReceipt' && prm[0] === tx && !fired) { fired = true; await assign(); } return p.chain.rpc(m, prm); };
+    const settings = JSON.parse(p.rows("SELECT value FROM settings WHERE key = 'tics_payments'")[0].value);
+    await finalizeDeposits(p.env, settings, racing, { now: Date.now() });
+    assert.ok(fired);
+    // Whatever the first run decided, the next run finishes it: the wallet knows it is final, money can leave.
+    await finalizeDeposits(p.env, settings, p.chain.rpc, { now: Date.now() + 60_000 });
+    assert.ok(p.rows('SELECT finalized_at FROM chain_deposits WHERE id = ?', row.id)[0].finalized_at);
+    assert.equal((await p.call('/api/wallet', { cookie: a.cookie })).data.withdrawPendingSince, null);
+    assert.equal((await a.wd(100_000)).status, 200);
+  } finally { p.restore(); }
+});
+
+test('verification review M2: a reversal whose reply was lost is finished, not called final, when the transfer shows up again', async () => {
+  const p = platform();
+  try {
+    p.chain.finalized = 980;
+    const a = await funded(p, 5000n);
+    const [dep] = p.rows('SELECT * FROM chain_deposits WHERE player_id = ?', a.address);
+    const receipt = p.chain.receipts.get(dep.tx_hash);
+    p.chain.receipts.delete(dep.tx_hash);
+    p.chain.finalized = 1000;
+    const settings = JSON.parse(p.rows("SELECT value FROM settings WHERE key = 'tics_payments'")[0].value);
+    const gone = async (m, prm) => (m === 'eth_getTransactionReceipt' ? null : p.chain.rpc(m, prm));
+    const t0 = Date.now();
+    await finalizeDeposits(p.env, settings, p.chain.rpc, { rpc2: gone, now: t0 });
+    const obj = p.env.CASINO.get(a.address); const orig = obj.fetch.bind(obj);
+    obj.fetch = async (req) => { const res = await orig(req); if (new URL(req.url).pathname === '/internal/tics-deposit-reverse') throw new Error('reply lost'); return res; };
+    await finalizeDeposits(p.env, settings, p.chain.rpc, { rpc2: gone, now: t0 + 2 * FINAL_MISS_CONFIRM_MS });
+    obj.fetch = orig;
+    assert.equal(await realOf(p, a.cookie), 0, 'taken back');
+    // A provider glitch: the transfer is seen again.
+    p.chain.receipts.set(dep.tx_hash, receipt);
+    await finalizeDeposits(p.env, settings, p.chain.rpc, { now: t0 + 3 * FINAL_MISS_CONFIRM_MS });
+    const [row] = p.rows('SELECT finalized_at, reversed_at FROM chain_deposits WHERE id = ?', dep.id);
+    assert.equal(row.finalized_at, null, 'never called final once the wallet took it back');
+    assert.ok(row.reversed_at);
+    assert.equal(p.rows('SELECT status FROM players WHERE id = ?', a.address)[0].status, 'frozen');
+    assert.equal(p.rows("SELECT severity FROM alerts WHERE dedupe_key = ?", `tics_deposit_gone:player:${dep.id}`)[0].severity, 'critical');
+    assert.equal(p.rows("SELECT COUNT(*) AS n FROM ledger WHERE type = 'deposit_reversal'")[0].n, 1);
+  } finally { p.restore(); }
+});
+
+test('verification review L1/L2: a reversal recorded by the first version is honoured, and the wallet decides the withdrawal wait', async () => {
+  const DB = createD1(MIGRATIONS);
+  const obj = new DemoCasino({ storage: doStorage() }, { DB, INTERNAL_SECRET: 's' });
+  obj.setMeta('player_id', 'p1'); obj.init({}, 1000);
+  const ref = `td:1-0x${'33'.repeat(32)}-0`;
+  obj.ticsOp('tics-deposit', { ref, amountCents: 500 });
+  assert.match(obj.wallet().withdrawPendingSince, /Z$/, 'the wallet reports the wait itself');
+  // The first version's reversal: ledger row + processed_payments 'rv:' marker, no tics_reversals row.
+  obj.setTics(0, 'deposit_reversal', -500, { ref, reason: 'transfer gone from the chain', shortCents: 0 });
+  obj.sql.exec('INSERT INTO processed_payments (ref) VALUES (?)', `rv:${ref.slice(3)}`);
+  const again = obj.ticsOp('tics-deposit-reverse', { ref, amountCents: 500 });
+  assert.deepEqual([again.duplicate, again.reversedCents, again.shortCents], [true, 500, 0], 'same amounts, nothing taken twice');
+  assert.equal(obj.one("SELECT COUNT(*) AS n FROM ledger WHERE type = 'deposit_reversal'").n, 1);
+  assert.equal(obj.ticsOp('tics-deposit-final', { ref }).reversed, true, 'a reversed deposit is never called final');
 });

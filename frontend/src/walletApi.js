@@ -158,7 +158,7 @@ export function clearDepositFor(storage, address) {
 }
 
 // After a top up, withdrawals open once Ethereum has confirmed it for good (about 15 minutes).
-// sinceIso = when the newest top up that is not final yet was credited (profile.withdrawPendingSince).
+// sinceIso = when the newest top up that is not final yet was credited (wallet.withdrawPendingSince, from the player's wallet).
 export const WITHDRAW_WAIT_MINUTES = 15;
 export const TOPUP_WAIT_NOTE = 'You can play as soon as your top up is credited. Withdrawals open about 15 minutes after it arrives, once Ethereum has confirmed it for good.';
 export const creditedText = (amount) => `Credited ${amount}. You can play now. Withdrawals open in about 15 minutes.`;
