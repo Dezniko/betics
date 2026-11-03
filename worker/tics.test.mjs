@@ -10,7 +10,7 @@ import { clearConfigCache } from './platform.js';
 import { createD1 } from '../test-support/d1shim.mjs';
 import { deriveOutcome } from '../backend/src/core/fairness.js';
 import { weiToUnits, unitsToWei, formatTics, normAddress, OFFICIAL_TICS, TRANSFER_TOPIC, decodeTransfers, rpcClient } from './tics.js';
-import { chainTick, parseHoldings, refreshHoldings, HOLDINGS_DAILY_CAP, sweepSpinHolds, liveFloat, reserveSpinExposure, HOLD_ALERT_AFTER_MS, finalizeDeposits, FINAL_MISS_CONFIRM_MS } from './wallet.js';
+import { owedUnits, chainTick, parseHoldings, refreshHoldings, HOLDINGS_DAILY_CAP, sweepSpinHolds, liveFloat, reserveSpinExposure, HOLD_ALERT_AFTER_MS, finalizeDeposits, FINAL_MISS_CONFIRM_MS } from './wallet.js';
 
 const MIGRATIONS = ['0001_platform.sql', '0002_payments.sql', '0003_tics.sql', '0004_spin_holds.sql', '0005_audit_fixes.sql', '0006_admin.sql', '0007_r3.sql', '0008_reaudit.sql'].map((f) => new URL(`../migrations/${f}`, import.meta.url).pathname);
 const HOST = 'betics.example';
@@ -45,7 +45,15 @@ function fakeChain() {
     }
     if (method === 'eth_getTransactionReceipt') return chain.receipts.get(params[0]) || null;
     if (method === 'eth_getBlockByNumber' && params[0] === 'finalized') return { number: `0x${(chain.finalized ?? chain.block).toString(16)}` };
-    if (method === 'eth_call') return `0x${chain.tokenBalance.toString(16).padStart(64, '0')}`;
+    if (method === 'eth_call') {
+      // Like a real node: a block number answers with the balance as it was then (transfers mined later are left out).
+      let balance = chain.tokenBalance;
+      const tag = params?.[1];
+      if (typeof tag === 'string' && /^0x[0-9a-f]+$/i.test(tag)) {
+        for (const l of chain.logs) if (l.address === OFFICIAL_TICS && l.topics[2] === pad(CASINO) && Number(l.blockNumber) > Number(tag)) balance -= BigInt(l.data);
+      }
+      return `0x${balance.toString(16).padStart(64, '0')}`;
+    }
     if (method === 'eth_getBalance') return `0x${chain.ethBalance.toString(16)}`;
     throw new Error(`unexpected ${method}`);
   };
@@ -1616,4 +1624,273 @@ test('verification review L1/L2: a reversal recorded by the first version is hon
   assert.deepEqual([again.duplicate, again.reversedCents, again.shortCents], [true, 500, 0], 'same amounts, nothing taken twice');
   assert.equal(obj.one("SELECT COUNT(*) AS n FROM ledger WHERE type = 'deposit_reversal'").n, 1);
   assert.equal(obj.ticsOp('tics-deposit-final', { ref }).reversed, true, 'a reversed deposit is never called final');
+});
+
+
+// ---------------------------------------------------------------------------------------------------------------
+// Prelaunch audit (3 Nov 2026), P1/P2/P3 and the failure matrix behind them.
+// The rule these tests hold every money path to: after ANY failure, what the central database counts as owed
+// (mirror + open bookings) is never below what the wallets really owe. Not one scenario: every way in.
+// ---------------------------------------------------------------------------------------------------------------
+const breakCopy = (obj, { batch = true, alarm = false } = {}) => {
+  const goodEnv = obj.env, goodAlarm = obj.ctx.storage.setAlarm;
+  if (batch) obj.env = { ...goodEnv, DB: { ...goodEnv.DB, prepare: goodEnv.DB.prepare, batch: async () => { throw new Error('injected: the central copy is rejected'); } } };
+  if (alarm) obj.ctx.storage.setAlarm = async () => { throw new Error('injected: alarm storage is rejected'); };
+  return () => { obj.env = goodEnv; obj.ctx.storage.setAlarm = goodAlarm; };
+};
+// Real money every wallet owes (balance + money held for withdrawals) minus what the central side counts.
+const liabilityGap = async (p) => {
+  let truth = 0;
+  for (const obj of p.objects.values()) truth += obj.ticsBalance() + (obj.heldTics()?.units || 0);
+  const central = (await owedUnits(p.DB)) + p.rows('SELECT COALESCE(SUM(units), 0) AS n FROM spin_holds')[0].n;
+  return { truth, central, gap: truth - central };
+};
+const casinoSettings = (p) => ({ casinoWallet: CASINO, realEnabled: true, startBlock: 990, feesEnabled: false, minWithdrawalUnits: 1000, quickDepositMaxUnits: 0 });
+const winningSpin = async (p, a, amountCents = 5_000) => {
+  const obj = p.env.CASINO.get(a.address);
+  const c = (await p.call('/api/fairness/commitment', { cookie: a.cookie })).data;
+  const entropy = randomBytes(32).toString('hex');
+  const cur = obj.commitment();
+  const pocket = deriveOutcome(cur.server_seed, `${cur.client_seed}:${entropy}`, cur.nonce, 37);
+  return p.call('/api/games/roulette/spin', { cookie: a.cookie, body: { bets: [{ type: 'straight', value: pocket, amountCents }], requestId: randomUUID(), expectedCommitment: c, clientEntropy: entropy, mode: 'real' } });
+};
+// Recovery: the wallet's own retry alarm (when it could be set) and the cron's sweep, which alone must be enough.
+const recoverAll = async (p, { alarm = true } = {}) => { if (alarm) for (const obj of p.objects.values()) await obj.alarm(); await sweepSpinHolds(p.env, Date.now() + 5 * 60_000); };
+
+test('P1 a deposit credited while its central copy is rejected stays counted as owed, and the free float stays honest', async () => {
+  const p = platform();
+  try {
+    const a = await funded(p, 5000n, 10000n); // 5,000 player, 10,000 house
+    const obj = p.env.CASINO.get(a.address);
+    const restore = breakCopy(obj);
+    p.chain.block = 1040;
+    p.chain.transfer({ from: a.address, wei: 50000n * 10n ** 18n, block: 1010 }); // a 50,000 $TICS top up
+    await chainTick(p.env, { rpc: p.chain.rpc });
+    assert.equal(obj.ticsBalance(), 5_500_000, 'the wallet credited it');
+    assert.equal(p.rows('SELECT real_tics_cents AS n FROM players WHERE id = ?', a.address)[0].n, 500_000, 'the central copy is behind (the audit fixture)');
+    const bookings = p.rows('SELECT units FROM spin_holds');
+    assert.deepEqual(bookings.map((b) => b.units), [5_000_000], 'booked before the credit, for the whole credit');
+    const { gap } = await liabilityGap(p);
+    assert.ok(gap <= 0, `the bank counts at least what it owes (gap ${gap})`);
+    // The audit's numbers: 65,000 held, 55,000 owed, so 10,000 free. It reported 60,000 free before this fix.
+    const live = await liveFloat(p.DB, await (await import('./tics.js')).ticsSettings(p.DB));
+    assert.equal(live.freeUnits, 1_000_000, 'free float is the 10,000 the bank really has, not 60,000');
+    // A bet that only the false 60,000 would allow is refused.
+    const r = await p.spin(a.cookie, [{ type: 'straight', value: 7, amountCents: 40_000 }], 'real');
+    assert.ok(r.status >= 400 && /most you can bet/i.test(r.data.error), JSON.stringify(r.data));
+    // The copy recovers: booking gone, mirror right, nothing left over.
+    restore(); await recoverAll(p);
+    assert.equal(p.rows('SELECT COUNT(*) AS n FROM spin_holds')[0].n, 0);
+    assert.equal(p.rows('SELECT real_tics_cents AS n FROM players WHERE id = ?', a.address)[0].n, 5_500_000);
+    assert.equal((await liabilityGap(p)).gap, 0);
+  } finally { p.restore(); }
+});
+
+test('P1 the booking is written before the credit: if it cannot be written nothing is credited, and the retry credits once', async () => {
+  const p = platform();
+  try {
+    const a = await funded(p, 5000n, 100000n);
+    const obj = p.env.CASINO.get(a.address), goodEnv = obj.env;
+    obj.env = { ...goodEnv, DB: { ...goodEnv.DB, prepare: (sql) => { if (/INSERT INTO spin_holds/.test(sql)) throw new Error('injected: no booking'); return goodEnv.DB.prepare(sql); }, batch: goodEnv.DB.batch } };
+    p.chain.block = 1040;
+    p.chain.transfer({ from: a.address, wei: 700n * 10n ** 18n, block: 1010 });
+    await chainTick(p.env, { rpc: p.chain.rpc }).catch(() => {});
+    assert.equal(obj.ticsBalance(), 500_000, 'not credited without a booking');
+    assert.equal(p.rows('SELECT credited_at FROM chain_deposits ORDER BY rowid DESC LIMIT 1')[0].credited_at, null, 'recorded, waiting');
+    obj.env = goodEnv;
+    await chainTick(p.env, { rpc: p.chain.rpc }); // the stuck credit is retried
+    assert.equal(obj.ticsBalance(), 570_000, 'credited once');
+    assert.equal(p.rows('SELECT COUNT(*) AS n FROM spin_holds')[0].n, 0);
+    await chainTick(p.env, { rpc: p.chain.rpc });
+    assert.equal(obj.ticsBalance(), 570_000, 'never twice');
+  } finally { p.restore(); }
+});
+
+test('P1 a duplicate or refused credit leaves no booking behind', async () => {
+  const p = platform();
+  try {
+    const a = await funded(p, 5000n, 100000n);
+    const obj = p.env.CASINO.get(a.address);
+    const [dep] = p.rows('SELECT * FROM chain_deposits');
+    const ref = `td:${dep.chain_id}-${dep.tx_hash}-${dep.log_index}`;
+    const post = (op, body) => obj.fetch(new Request(`https://wallet/internal/${op}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Internal-Secret': 'test-secret' }, body: JSON.stringify(body) }));
+    const again = await post('tics-deposit', { ref, amountCents: dep.amount_units, playerId: a.address });
+    assert.equal(again.status, 200);
+    assert.equal(p.rows('SELECT COUNT(*) AS n FROM spin_holds')[0].n, 0, 'duplicate: nothing booked');
+    const bad = await post('tics-deposit', { ref: 'td:nonsense', amountCents: 123, playerId: a.address });
+    assert.notEqual(bad.status, 200);
+    assert.equal(p.rows('SELECT COUNT(*) AS n FROM spin_holds')[0].n, 0, 'refused: nothing booked');
+    assert.equal(obj.ticsBalance(), 500_000);
+  } finally { p.restore(); }
+});
+
+test('P1 a withdrawal refund is covered the same way: balance up in the wallet, copy rejected', async () => {
+  const p = platform();
+  try {
+    const a = await funded(p, 5000n, 100000n);
+    const obj = p.env.CASINO.get(a.address);
+    const w = await a.wd(200_000);
+    assert.equal(w.status, 200, JSON.stringify(w.data));
+    const row = p.rows('SELECT * FROM chain_withdrawals')[0];
+    const restore = breakCopy(obj, { batch: true, alarm: true });
+    const post = (op, body) => obj.fetch(new Request(`https://wallet/internal/${op}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Internal-Secret': 'test-secret' }, body: JSON.stringify(body) }));
+    const released = await post('tics-release', { ref: `th:${row.id}`, playerId: a.address });
+    assert.equal(released.status, 200, await released.clone().text());
+    p.DB.raw.prepare("UPDATE chain_withdrawals SET status = 'failed' WHERE id = ?").run(row.id); // what the payouts Worker does next
+    const { truth, central, gap } = await liabilityGap(p);
+    assert.equal(truth, 500_000);
+    assert.ok(gap <= 0, `refund covered (${central} vs ${truth})`);
+    restore(); await recoverAll(p);
+    assert.equal(p.rows('SELECT COUNT(*) AS n FROM spin_holds')[0].n, 0);
+    assert.equal((await liabilityGap(p)).gap, 0);
+  } finally { p.restore(); }
+});
+
+test('P2 a won spin whose copy AND retry alarm are both rejected: the player gets the result and the booking stays', async () => {
+  const p = platform();
+  try {
+    const a = await funded(p, 5000n, 100000n);
+    const obj = p.env.CASINO.get(a.address);
+    const restore = breakCopy(obj, { batch: true, alarm: true });
+    const r = await winningSpin(p, a);
+    assert.equal(r.status, 200, JSON.stringify(r.data)); // it used to be a 500 that released the booking
+    assert.ok(r.data.balanceAfterCents > 500_000, 'a real win');
+    assert.equal(p.rows('SELECT COUNT(*) AS n FROM spin_holds')[0].n, 1, 'the booking stays: the copy is behind');
+    assert.equal(p.rows('SELECT real_tics_cents AS n FROM players WHERE id = ?', a.address)[0].n, 500_000);
+    assert.ok((await liabilityGap(p)).gap <= 0);
+    // Another bet in the same state is still safe, and none of them can free the booking.
+    for (let i = 0; i < 3; i++) { await winningSpin(p, a, 1_000); assert.ok((await liabilityGap(p)).gap <= 0, `still covered after spin ${i + 2}`); }
+    restore(); await recoverAll(p, { alarm: false }); // no alarm was ever set: the cron's sweep alone recovers it
+    assert.equal(p.rows('SELECT COUNT(*) AS n FROM spin_holds')[0].n, 0);
+    assert.equal(p.rows('SELECT real_tics_cents AS n FROM players WHERE id = ?', a.address)[0].n, obj.ticsBalance());
+  } finally { p.restore(); }
+});
+
+test('P2 an unexpected 500 from the wallet after it committed keeps the booking; the cron then frees it once the copy landed', async () => {
+  const p = platform();
+  try {
+    const a = await funded(p, 5000n, 100000n);
+    const obj = p.env.CASINO.get(a.address), orig = obj.fetch.bind(obj);
+    const restore = breakCopy(obj); // the copy is behind AND the answer the Worker sees is a bare 500
+    obj.fetch = async (req) => { const res = await orig(req); return new URL(req.url).pathname === '/api/games/roulette/spin' ? Response.json({ error: 'boom' }, { status: 500 }) : res; };
+    const r = await winningSpin(p, a);
+    assert.equal(r.status, 500);
+    assert.equal(p.rows('SELECT COUNT(*) AS n FROM spin_holds')[0].n, 1, 'a 500 with no answer from the wallet is not permission to release');
+    assert.ok((await liabilityGap(p)).gap <= 0);
+    obj.fetch = orig; restore();
+    assert.deepEqual(await sweepSpinHolds(p.env, Date.now() + 3 * 60_000), { checked: 1, released: 1, kept: 0 });
+    assert.equal((await liabilityGap(p)).gap, 0);
+  } finally { p.restore(); }
+});
+
+test('P2 refusals before anything is committed still free their booking at once (no stranded bookings, no lost availability)', async () => {
+  const p = platform();
+  try {
+    const a = await funded(p, 5000n, 100000n);
+    // rate limit: a burst until the wallet says slow down
+    let slow = 0;
+    for (let i = 0; i < 25; i++) { const r = await p.spin(a.cookie, [{ type: 'red', amountCents: 100 }], 'real'); if (r.status === 429) slow++; }
+    assert.ok(slow > 0, 'the rate limit was hit');
+    assert.equal(p.rows('SELECT COUNT(*) AS n FROM spin_holds')[0].n, 0, 'every settled or refused spin freed its booking');
+    // a refusal thrown by the spin (stale table) is released too
+    const bad = await p.spin(a.cookie, [{ type: 'red', amountCents: 100 }], 'real', { expectedCommitment: 'stale' });
+    assert.ok(bad.status >= 400 && bad.status < 500, String(bad.status));
+    assert.equal(p.rows('SELECT COUNT(*) AS n FROM spin_holds')[0].n, 0);
+  } finally { p.restore(); }
+});
+
+test('failure matrix: every way the central copy can fail, on every money path, never leaves the bank under-counting', async () => {
+  const modes = { copy: { batch: true, alarm: false }, 'copy+alarm': { batch: true, alarm: true } };
+  for (const [name, mode] of Object.entries(modes)) {
+    for (const path of ['win', 'loss', 'deposit', 'refund']) {
+      const p = platform();
+      try {
+        const a = await funded(p, 5000n, 100000n);
+        const obj = p.env.CASINO.get(a.address);
+        const restore = breakCopy(obj, mode);
+        if (path === 'win') await winningSpin(p, a);
+        if (path === 'loss') await p.spin(a.cookie, [{ type: 'red', amountCents: 5_000 }, { type: 'black', amountCents: 4_000 }], 'real');
+        if (path === 'deposit') { p.chain.block = 1040; p.chain.transfer({ from: a.address, wei: 900n * 10n ** 18n, block: 1010 }); await chainTick(p.env, { rpc: p.chain.rpc }).catch(() => {}); }
+        if (path === 'refund') {
+          restore();
+          const w = await a.wd(100_000); assert.equal(w.status, 200);
+          const row = p.rows('SELECT * FROM chain_withdrawals')[0];
+          const again = breakCopy(obj, mode);
+          const res = await obj.fetch(new Request('https://wallet/internal/tics-release', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Internal-Secret': 'test-secret' }, body: JSON.stringify({ ref: `th:${row.id}`, playerId: a.address }) }));
+          assert.equal(res.status, 200);
+          p.DB.raw.prepare("UPDATE chain_withdrawals SET status = 'failed' WHERE id = ?").run(row.id);
+          p.restoreCopy = again;
+        }
+        const g = await liabilityGap(p);
+        assert.ok(g.gap <= 0, `${name} / ${path}: bank counts ${g.central}, wallets owe ${g.truth}`);
+        (p.restoreCopy || restore)(); await recoverAll(p, { alarm: !mode.alarm });
+        const after = await liabilityGap(p);
+        assert.equal(after.gap, 0, `${name} / ${path}: recovered exactly`);
+        assert.equal(p.rows('SELECT COUNT(*) AS n FROM spin_holds')[0].n, 0, `${name} / ${path}: no booking left over`);
+      } finally { p.restore(); }
+    }
+  }
+});
+
+test('P1 money in the wallet that the deposit scan has not classified is not counted as the casino float', async () => {
+  const p = platform();
+  try {
+    const a = await funded(p, 5000n, 10000n);
+    const { ticsSettings } = await import('./tics.js');
+    // 50,000 $TICS mined 3 blocks ago: in the wallet, but the scan (12 blocks deep) has not credited it yet.
+    p.chain.block = 1040;
+    await chainTick(p.env, { rpc: p.chain.rpc }); // the scan moves up to its safe point first
+    p.chain.transfer({ from: a.address, wei: 50000n * 10n ** 18n, block: 1038 });
+    p.chain.block = 1041;
+    await chainTick(p.env, { rpc: p.chain.rpc });
+    assert.equal(p.rows('SELECT COUNT(*) AS n FROM chain_deposits')[0].n, 1, 'not recorded yet');
+    const live = await liveFloat(p.DB, await ticsSettings(p.DB));
+    assert.equal(live.tokenUnits, 6_500_000, 'the wallet really holds 65,000');
+    assert.equal(live.freeUnits, 1_000_000, 'but only the 10,000 house money is free float');
+    // Later it is deep enough: credited, owed, and the float is still the 10,000.
+    p.chain.block = 1060;
+    await chainTick(p.env, { rpc: p.chain.rpc });
+    const later = await liveFloat(p.DB, await ticsSettings(p.DB));
+    assert.equal(later.owedUnits, 5_500_000);
+    assert.equal(later.freeUnits, 1_000_000);
+  } finally { p.restore(); }
+});
+
+test('P3 health is liveness only and never claims a mode; readiness reads the live settings and data', async () => {
+  const p = platform();
+  try {
+    const h = await p.call('/api/health');
+    assert.equal(h.status, 200); assert.equal(h.data.ok, true); assert.equal(h.data.mode, undefined); assert.equal(h.data.realMoney, undefined);
+    let ready = await p.call('/api/ready');
+    assert.equal(ready.status, 200); assert.equal(ready.data.mode, 'demo');
+    await funded(p, 5000n, 10000n);
+    ready = await p.call('/api/ready');
+    assert.equal(ready.data.mode, 'real', 'follows the setting, not a constant');
+    assert.equal(ready.data.reserveFresh, true);
+    assert.equal(ready.status, 200);
+    p.DB.raw.prepare("UPDATE chain_state SET value = json_set(value, '$.at', 1) WHERE key = 'float'").run();
+    ready = await p.call('/api/ready');
+    assert.equal(ready.status, 503, 'real mode with a stale casino wallet reading is not ready');
+    assert.equal(ready.data.ok, false);
+  } finally { p.restore(); }
+});
+
+test('P1 a credit whose booking the cron closed as never-ran is refused, then credits with a fresh booking (no credit without cover)', async () => {
+  const p = platform();
+  try {
+    const a = await funded(p, 5000n, 100000n);
+    const obj = p.env.CASINO.get(a.address);
+    // A booking written for a credit that then stalled for minutes: the cron asks the wallet and closes it as void.
+    const now = Date.now();
+    p.DB.raw.prepare('INSERT INTO spin_holds (id, player_id, units, expires_at, booked_at) VALUES (?, ?, ?, ?, ?)').run('cr:stalled', a.address, 70_000, now + 1e12, now - 5 * 60_000);
+    assert.deepEqual(await sweepSpinHolds(p.env, now), { checked: 1, released: 1, kept: 0 });
+    assert.throws(() => obj.ticsOp('tics-deposit', { ref: 'td:1-0xabc12345-0', amountCents: 70_000 }, { holdId: 'cr:stalled' }), /closed before it ran/);
+    assert.equal(obj.ticsBalance(), 500_000, 'nothing credited under a closed booking');
+    // The normal path books afresh and credits once.
+    p.chain.block = 1040;
+    p.chain.transfer({ from: a.address, wei: 700n * 10n ** 18n, block: 1010 });
+    await chainTick(p.env, { rpc: p.chain.rpc });
+    assert.equal(obj.ticsBalance(), 570_000);
+    assert.equal((await liabilityGap(p)).gap, 0);
+  } finally { p.restore(); }
 });

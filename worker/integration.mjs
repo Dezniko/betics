@@ -23,7 +23,8 @@ async function callOnce(path, { cookie, body, method = body === undefined ? 'GET
 
 const health = await call('/api/health');
 assert.equal(health.status, 200);
-assert.equal(health.data.mode, 'demo');
+assert.equal(health.data.ok, true);
+assert.equal(health.data.mode, undefined, 'health is liveness only; the operating mode comes from /api/ready');
 assert.equal(health.headers.get('x-robots-tag'), 'noindex, nofollow, noarchive');
 console.log('PASS public demo health');
 

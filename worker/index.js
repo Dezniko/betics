@@ -12,7 +12,7 @@ import { isTronAddress, paymentSettings, providerReady, createProviderPayment, v
 import { resolvePlayer, createGuestPlayer, touchPlayer, requestMeta, recordEvent, loadGameConfig, publicConfig, triggerMessages, inbox, markInbox } from './platform.js';
 import {
   WalletError, rateLimit, issueNonce, verifySiwe, contractVerifier, upsertWalletPlayer, createWalletSession, walletCookie, walletToken,
-  resolveWalletPlayer, revokeWalletSession, profile, saveEmail, readFloat, freeFloatFrom, liveFloat, liveFloatCached, publicReserve, reserveSpinExposure, releaseSpinExposure, checkDepositTx, chainTick, requestWithdrawal, refreshHoldings, withdrawalFee,
+  resolveWalletPlayer, revokeWalletSession, profile, saveEmail, readFloat, freeFloatFrom, liveFloat, liveFloatCached, publicReserve, reserveSpinExposure, releaseSpinExposure, HOLD_KEEP_MS, checkDepositTx, chainTick, requestWithdrawal, refreshHoldings, withdrawalFee,
 } from './wallet.js';
 import { ticsSettings, rpcClient, rpcUrl, formatTics } from './tics.js';
 
@@ -341,8 +341,27 @@ export default {
       }
       checkOrigin(request);
       if (url.pathname === '/api/demo/reset-balance' && env.STAGING !== 'true') fail(404, 'demo endpoint not found');
+      // Liveness only (prelaunch audit P3): the Worker answers. It says nothing about the operating mode or about
+      // whether money can move; /api/ready does that from the live settings and data.
       if (url.pathname === '/api/health' && request.method === 'GET') {
-        return secured(json({ ok: true, mode: 'demo', realMoney: false, storage: 'durable-object-sqlite' }));
+        return secured(json({ ok: true, live: true, storage: 'durable-object-sqlite' }));
+      }
+      if (url.pathname === '/api/ready' && request.method === 'GET') {
+        const checks = { database: false, mode: 'unknown', reserveFresh: null, staleBookings: null };
+        try {
+          await env.DB.prepare('SELECT 1 AS ok').first();
+          checks.database = true;
+          const settings = await ticsSettings(env.DB);
+          checks.mode = settings.realEnabled ? 'real' : 'demo';
+          const floatRow = await env.DB.prepare("SELECT value FROM chain_state WHERE key = 'float'").first(); // uncached: a readiness answer must be current
+          const float = floatRow ? JSON.parse(floatRow.value) : null;
+          checks.reserveFresh = !!float && Date.now() - float.at <= 10 * 60_000;
+          checks.staleBookings = (await env.DB.prepare('SELECT COUNT(*) AS n FROM spin_holds WHERE booked_at IS NOT NULL AND booked_at < ?').bind(Date.now() - 10 * 60_000).first())?.n ?? 0;
+        } catch (error) { console.error('readiness check failed', error?.message || error); }
+        // Demo play needs only the database. Real play also needs a fresh casino wallet reading and no
+        // booking waiting for its balance copy for more than ten minutes.
+        const ok = checks.database && (checks.mode === 'demo' || (checks.reserveFresh === true && checks.staleBookings === 0));
+        return secured(json({ ok, ...checks }, ok ? 200 : 503));
       }
       if (url.pathname === '/api/casino/reserve' && request.method === 'GET') {
         // Public: what the casino wallet holds on-chain, whether it covers every player balance, and the most one spin can win.
@@ -453,12 +472,14 @@ export default {
       let response;
       try { response = secured(await stub.fetch(forwarded)); }
       finally {
-        // Free the booking once the settled balance is in the central copy (the Durable Object says so).
-        // If that copy is still pending, or the call failed with no reply (the spin may have settled
-        // anyway), the booking stays counted: the wallet's next central copy deletes it, or the cron asks
-        // the wallet about it (sweepSpinHolds). It never just runs out.
-        if (holdId && response && response.headers.get('X-Flushed') !== '0') await releaseSpinExposure(env.DB, holdId);
-        response?.headers.delete('X-Flushed'); // internal signal only
+        // Free the booking only on a positive answer from the player's wallet (prelaunch audit P2): either
+        // the settled balance is in the central copy, or the spin was refused before anything was committed.
+        // Anything else (a 500 from an unexpected error, a copy that is still pending, no reply at all: the
+        // spin may have settled) keeps the booking counted: the wallet's next central copy deletes it, or the
+        // cron asks the wallet about it (sweepSpinHolds). It never just runs out, and it is never released by
+        // default.
+        if (holdId && response && response.headers.get('X-Hold') === 'release') await releaseSpinExposure(env.DB, holdId);
+        response?.headers.delete('X-Hold'); // internal signal only
       }
       if (walletPlayer) {
         // Wallet sessions never set or need the guest cookie.
@@ -556,7 +577,8 @@ export class DemoCasino {
   flush() {
     // A hung D1 call must not hold every later spin of this player: give up waiting after 15 s
     // (the copy then counts as not done, so spin bookings are kept until they expire).
-    const once = () => Promise.race([this.flushOnce(), new Promise((r) => setTimeout(() => r(false), 15_000))]);
+    // It never rejects (prelaunch audit P2): any failure counts as 'not copied', so callers keep their bookings.
+    const once = () => Promise.race([this.flushOnce().catch((error) => { console.error('central copy crashed', error); return false; }), new Promise((r) => setTimeout(() => r(false), 15_000))]);
     const run = (this.flushChain || Promise.resolve()).then(once, once);
     this.flushChain = run.catch(() => {});
     return run;
@@ -603,7 +625,8 @@ export class DemoCasino {
       return true;
     } catch (error) {
       console.error('central copy failed, retrying', error);
-      await this.ctx.storage.setAlarm(Date.now() + 30_000);
+      // Its own guard (prelaunch audit P2): a failing alarm must not turn 'copy pending' into an exception.
+      try { await this.ctx.storage.setAlarm(Date.now() + 30_000); } catch (alarmError) { console.error('retry alarm could not be set', alarmError); }
       return false;
     }
   }
@@ -649,9 +672,12 @@ export class DemoCasino {
   //  tics-hold     take a withdrawal amount off the balance  ref th:<withdrawalId>
   //  tics-finalise the withdrawal was paid on-chain          ref = the hold ref
   //  tics-release  the withdrawal failed or was cancelled    ref = the hold ref (money goes back)
-  ticsOp(kind, body, { final = false } = {}) {
+  ticsOp(kind, body, { final = false, holdId = null } = {}) {
     if (typeof body.ref !== 'string' || !/^t[dh]:[A-Za-z0-9-]{8,100}$/.test(body.ref)) fail(400, 'invalid payment ref');
     return this.ctx.storage.transactionSync(() => {
+      // A credit whose booking the cron already closed as 'never ran' (it sat unanswered for minutes) is refused, so
+      // no credit can ever land without a booking. The caller retries and books afresh.
+      if (holdId && this.one("SELECT 1 AS ok FROM spin_hold_marks WHERE hold_id = ? AND state = 'void'", holdId)) fail(409, 'The booking for this credit was closed before it ran. Nothing was credited; it will be retried.');
       if (kind === 'tics-deposit' || kind === 'tics-hold') {
         if (!Number.isSafeInteger(body.amountCents) || body.amountCents <= 0) fail(400, 'invalid amount');
         if (this.one('SELECT ref FROM processed_payments WHERE ref = ?', body.ref)) return { duplicate: true, realTicsCents: this.ticsBalance() };
@@ -662,6 +688,9 @@ export class DemoCasino {
           // Not withdrawable until the cron has seen it in a final block (unless it already has).
           this.sql.exec(`INSERT INTO tics_finality (ref, units, final, credited_at) VALUES (?, ?, ?, datetime('now'))
             ON CONFLICT(ref) DO UPDATE SET units = excluded.units, final = MAX(final, excluded.final), credited_at = excluded.credited_at`, body.ref, body.amountCents, final ? 1 : 0);
+          // The booking made before this credit (bookCredit) is marked in the same transaction as the credit, so the
+          // central copy that carries this balance also deletes exactly that booking.
+          if (holdId) this.sql.exec("INSERT OR IGNORE INTO spin_hold_marks (hold_id, state) VALUES (?, 'pending')", holdId);
         } else {
           if (!body.ref.startsWith('th:')) fail(400, 'invalid payment ref');
           // Never pay out from a balance that does not match its own ledger.
@@ -729,6 +758,7 @@ export class DemoCasino {
         if (hold.status !== 'held') fail(409, 'hold already paid');
         this.sql.exec("UPDATE holds SET status = 'released', updated_at = datetime('now') WHERE ref = ?", body.ref);
         this.setTics(this.ticsBalance() + hold.units, 'withdrawal_refund', hold.units, { ref: body.ref, ...(body.reason ? { reason: String(body.reason).slice(0, 200) } : {}) });
+        if (holdId) this.sql.exec("INSERT OR IGNORE INTO spin_hold_marks (hold_id, state) VALUES (?, 'pending')", holdId);
         return { duplicate: false, realTicsCents: this.ticsBalance() };
       }
       fail(404, 'demo endpoint not found');
@@ -754,6 +784,31 @@ export class DemoCasino {
       this.sql.exec("INSERT INTO spin_hold_marks (hold_id, state) VALUES (?, 'void')", holdId);
       return { state: 'void' };
     });
+  }
+  // Booking for a credit (prelaunch audit P1). A wallet's balance is the truth, the central database holds a copy
+  // that the bank's liability sum reads. A credit (a deposit, or a withdrawal refund) makes the wallet's balance
+  // higher than that copy until the copy lands. So the amount is first written to the same table the spin
+  // bookings use, with a fresh id per attempt; the credit marks it in its own transaction; the central copy deletes
+  // it in the same batch as the new balance; the cron closes bookings whose credit never happened.
+  async bookCredit(kind, body) {
+    const db = this.env.DB, playerId = this.getMeta('player_id');
+    if (!db || !playerId || typeof body?.ref !== 'string') return null;
+    let units = 0;
+    if (kind === 'tics-deposit') {
+      if (!Number.isSafeInteger(body.amountCents) || body.amountCents <= 0) return null; // refused by the credit itself
+      if (this.one('SELECT ref FROM processed_payments WHERE ref = ?', body.ref)) return null; // already credited: nothing new
+      units = body.amountCents;
+    } else if (kind === 'tics-release') {
+      const hold = this.one('SELECT units, status FROM holds WHERE ref = ?', body.ref);
+      if (!hold || hold.status !== 'held') return null;
+      units = hold.units;
+    } else return null;
+    const id = `cr:${crypto.randomUUID()}`, now = Date.now();
+    await db.prepare('INSERT INTO spin_holds (id, player_id, units, expires_at, booked_at) VALUES (?, ?, ?, ?, ?)').bind(id, playerId, units, now + HOLD_KEEP_MS, now).run();
+    return id;
+  }
+  async dropBooking(id) {
+    if (id && this.env.DB) await this.env.DB.prepare('DELETE FROM spin_holds WHERE id = ?').bind(id).run().catch(() => {});
   }
   // A credit needs a recorded on-chain deposit behind it: the central deposits table must hold that exact
   // transfer (chain, transaction, log), for the same amount, linked to THIS player, credited or assigned
@@ -970,7 +1025,18 @@ export class DemoCasino {
         if (method === 'POST' && op) { const result = this.paymentOp(op[1], body); await this.flush(); return json(result); }
         const tics = pathname.match(/^\/internal\/(tics-deposit|tics-deposit-reverse|tics-deposit-final|tics-hold|tics-finalise|tics-release|tics-hold-check|tics-hold-void)$/);
         const evidence = method === 'POST' && tics && tics[1] === 'tics-deposit' ? await this.depositEvidence(body) : {};
-        if (method === 'POST' && tics) { const result = this.ticsOp(tics[1], body, evidence); if (!tics[1].startsWith('tics-hold-')) await this.flush(); return json(result); }
+        if (method === 'POST' && tics) {
+          // Every operation that RAISES a real balance is booked in the central database first (prelaunch audit P1):
+          // until the central copy carries the new balance, that amount counts as owed there. If the booking cannot
+          // be written, nothing is credited and the caller retries.
+          const bookingId = await this.bookCredit(tics[1], body);
+          let result;
+          try { result = this.ticsOp(tics[1], body, { ...evidence, holdId: bookingId }); } catch (error) { await this.dropBooking(bookingId); throw error; }
+          // A duplicate or a vanished hold credited nothing and marked nothing: its booking is not needed.
+          if (bookingId && result?.duplicate) await this.dropBooking(bookingId);
+          if (!tics[1].startsWith('tics-hold-')) await this.flush();
+          return json(result);
+        }
         fail(404, 'demo endpoint not found');
       }
       // Only the platform Worker can reach this object, and it always overwrites this header.
@@ -990,16 +1056,26 @@ export class DemoCasino {
       if (method === 'POST' && pathname === '/api/fairness/client-seed') return json(this.setSeed(body));
       if (method === 'POST' && pathname === '/api/fairness/rotate') return json(this.rotateLock(body));
       if (method === 'POST' && pathname === '/api/games/roulette/spin') {
-        if (this.env.DB && !context.config) fail(500, 'missing game config');
-        // A replay of a spin already made (lost reply) is always answered; new spins are rate limited.
-        const replay = typeof body?.requestId === 'string' && this.one('SELECT 1 AS ok FROM idempotency WHERE request_key = ?', body.requestId);
-        if (!replay && !this.takeSpinToken()) return json({ error: 'Slow down a little. Your bet was not taken.' }, 429);
-        const result = this.spin(request, body, context);
-        try { this.pruneOld(); } catch (error) { console.error('prune failed', error); }
-        const flushed = await this.flush();
-        const r = json(result);
-        if (flushed === false) r.headers.set('X-Flushed', '0');
-        return r;
+        // X-Hold tells the Worker whether the spin booking can be released (prelaunch audit P2). 'release' only
+        // when this wallet knows the booking is no longer needed: the spin was refused before anything was
+        // committed, or its balance is confirmed in the central copy. Everything else keeps it counted.
+        const release = (response) => { response.headers.set('X-Hold', 'release'); return response; };
+        try {
+          if (this.env.DB && !context.config) fail(500, 'missing game config');
+          // A replay of a spin already made (lost reply) is always answered; new spins are rate limited.
+          const replay = typeof body?.requestId === 'string' && this.one('SELECT 1 AS ok FROM idempotency WHERE request_key = ?', body.requestId);
+          if (!replay && !this.takeSpinToken()) return release(json({ error: 'Slow down a little. Your bet was not taken.' }, 429));
+          const result = this.spin(request, body, context);
+          try { this.pruneOld(); } catch (error) { console.error('prune failed', error); }
+          const flushed = await this.flush(); // never throws: false means the copy is still pending
+          const r = json(result);
+          r.headers.set('X-Hold', flushed === true ? 'release' : 'keep');
+          return r;
+        } catch (error) {
+          // A refusal thrown by the spin itself rolled back with its transaction: nothing was committed.
+          if (error instanceof ApiError) return release(errorResponse(error));
+          throw error;
+        }
       }
       if (method === 'GET' && pathname === '/api/rounds') {
         // Only settled/revealed rounds ever expose seeds, never the pending seed.

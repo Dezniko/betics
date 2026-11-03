@@ -189,7 +189,7 @@ export function freeFloatFrom(snapshot, now = Date.now()) {
 // spin answered with its balance in the central copy, the player's wallet copies it (its flush deletes
 // the booking in the same batch as the new balance), or the cron learns the spin never happened.
 // expires_at is set far ahead so every reader that counts "expires_at > now" keeps counting it.
-const HOLD_KEEP_MS = 10 * 365 * 86_400_000;
+export const HOLD_KEEP_MS = 10 * 365 * 86_400_000;
 export const HOLD_CHECK_AFTER_MS = 120_000;
 export const HOLD_ALERT_AFTER_MS = 10 * 60_000;
 const openHolds = async (db, now) => (await db.prepare('SELECT COALESCE(SUM(units),0) AS n FROM spin_holds WHERE expires_at > ?').bind(now).first().catch(() => ({ n: 0 })))?.n || 0;
@@ -209,9 +209,12 @@ export async function liveFloat(db, settings, now = Date.now()) {
   if (!snapshot || now - snapshot.at > FLOAT_MAX_AGE_MS || !Number.isSafeInteger(snapshot.tokenUnits) || !settings.casinoWallet) return null;
   const [owed, held, sent] = await Promise.all([owedUnits(db), openHolds(db, now), sentSinceUnits(db, snapshot.at)]);
   const tokenUnits = Math.max(0, snapshot.tokenUnits - sent); // what the wallet still holds
-  const free = Math.max(0, tokenUnits - owed - held);
+  // What the casino may treat as its own: money the deposit scan has already classified (prelaunch audit P1,
+  // second part). Tokens that arrived in the wallet but are not yet credited to a player are customer money.
+  const safeUnits = Math.min(tokenUnits, Math.max(0, (Number.isSafeInteger(snapshot.safeTokenUnits) ? snapshot.safeTokenUnits : snapshot.tokenUnits) - sent));
+  const free = Math.max(0, safeUnits - owed - held);
   const pct = Math.min(100, Math.max(1, Number(settings.maxSpinExposurePct) || DEFAULT_TICS.maxSpinExposurePct));
-  return { at: snapshot.at, wallet: snapshot.wallet, chainId: snapshot.chainId, tokenUnits, owedUnits: owed, heldUnits: held, sentUnits: sent, freeUnits: free,
+  return { at: snapshot.at, wallet: snapshot.wallet, chainId: snapshot.chainId, tokenUnits, safeUnits, owedUnits: owed, heldUnits: held, sentUnits: sent, freeUnits: free,
     covered: tokenUnits >= owed, exposurePct: pct, maxWinUnits: Math.floor(free * pct / 100 / 10_000) * 10_000 }; // whole 100 $TICS
 }
 // Demo spins only need the table limit to follow the real one roughly, so they share one reading per
@@ -233,7 +236,7 @@ export async function reserveSpinExposure(db, { id, playerId, units, now = Date.
   const since = `(SELECT datetime(CAST(json_extract(value, '$.at') AS INTEGER) / 1000 - ${SENT_MARGIN_S}, 'unixepoch') FROM chain_state WHERE key = 'float')`;
   const r = await db.prepare(`INSERT INTO spin_holds (id, player_id, units, expires_at, booked_at)
     SELECT ?1, ?2, ?3, ?4, ?5
-    WHERE COALESCE((SELECT json_extract(value, '$.tokenUnits') FROM chain_state WHERE key = 'float'), 0)
+    WHERE COALESCE((SELECT MIN(json_extract(value, '$.tokenUnits'), COALESCE(json_extract(value, '$.safeTokenUnits'), json_extract(value, '$.tokenUnits'))) FROM chain_state WHERE key = 'float'), 0)
       - ${sentSinceSql(since)}
       - (${OWED_SQL})
       - (SELECT COALESCE(SUM(units), 0) FROM spin_holds WHERE expires_at > ?5) >= ?3`)
@@ -289,19 +292,51 @@ const raise = (db, a) => db.prepare(`INSERT OR IGNORE INTO alerts (type, severit
   .bind(a.type, a.severity || 'warning', a.title, a.details || null, a.playerId || null, a.key);
 export { raise as raiseAlert };
 
+// The part of the wallet balance the casino may count as its own float (prelaunch audit P1, second part).
+// A deposit is in the wallet the moment it is mined, but it is only owed to a player once the deposit scan has
+// recorded and credited it (3 to 12 blocks later), so the plain balance briefly counts customer money as free.
+// This reading starts from the balance at a block the scan has already finished (so every deposit up to it is
+// classified), adds back what was credited after that block (it is owed, and still in the wallet), takes off
+// credits that failed. It is never above the latest balance (payouts that left meanwhile) and, when the node cannot answer, it can only stay the same or fall, never rise.
+export async function safeTokenReading(db, settings, rpc, latestUnits, previous = null) {
+  // Only a reading of this same wallet on this same chain can cap the new one.
+  const prior = Number.isSafeInteger(previous?.safeTokenUnits) && previous.wallet === settings.casinoWallet && previous.chainId === settings.chainId ? previous.safeTokenUnits : null;
+  const conservative = (block = null) => ({ units: prior === null ? latestUnits : Math.min(latestUnits, prior), block });
+  try {
+    const latest = hexToNumber(await rpc('eth_blockNumber'));
+    let block = latest - Math.max(1, settings.confirmations);
+    const watch = async (key) => { const r = await db.prepare('SELECT value FROM chain_state WHERE key = ?').bind(key).first(); return r ? JSON.parse(r.value) : null; };
+    const state = (await watch('tics_watch_full')) || (await watch('tics_watch'));
+    if (state && state.chainId === settings.chainId && state.wallet === settings.casinoWallet && Number.isSafeInteger(state.lastBlock)) block = Math.min(block, state.lastBlock);
+    else return conservative(); // no scan has run for this wallet yet: nothing is classified
+    if (!(block > 0)) return conservative();
+    const atBlock = weiToUnits(await tokenBalance(rpc, settings.token, settings.casinoWallet, block));
+    const row = await db.prepare(`SELECT
+        COALESCE(SUM(CASE WHEN status IN ('credited', 'assigned') AND credited_at IS NOT NULL AND block_number > ?2 THEN amount_units END), 0) AS credited_after,
+        COALESCE(SUM(CASE WHEN status IN ('credited', 'assigned') AND credited_at IS NULL AND block_number <= ?2 THEN amount_units END), 0) AS uncredited_before
+      FROM chain_deposits WHERE chain_id = ?1 AND status IN ('credited', 'assigned') AND reversed_at IS NULL AND created_at >= datetime('now', '-7 days')`).bind(settings.chainId, block).first();
+    const units = Math.max(0, atBlock + (row?.credited_after || 0) - (row?.uncredited_before || 0));
+    return { units: Math.min(latestUnits, units), block };
+  } catch (error) {
+    console.error('safe balance reading failed, keeping the lower of the last readings', error?.message || error);
+    return conservative();
+  }
+}
 export async function refreshFloat(env, settings, rpc, now = Date.now()) {
   const db = env.DB;
   const [tokenWei, ethWei, owed] = await Promise.all([
     tokenBalance(rpc, settings.token, settings.casinoWallet), rpc('eth_getBalance', [settings.casinoWallet, 'latest']).then((h) => BigInt(h)), owedUnits(db),
   ]);
   const tokenUnits = weiToUnits(tokenWei);
+  const previous0 = await db.prepare("SELECT value FROM chain_state WHERE key = 'float'").first().then((r) => (r ? JSON.parse(r.value) : null)).catch(() => null);
+  const safe = await safeTokenReading(db, settings, rpc, tokenUnits, previous0);
   // Insolvency check: a payout that is 'sending' may already have left the wallet while it still counts
   // as owed, so leave those out here (counting them twice would falsely pause payouts after a big send),
   // and only act on two bad readings in a row.
   const inFlight = (await db.prepare("SELECT COALESCE(SUM(amount_units),0) AS n FROM chain_withdrawals WHERE status = 'sending'").first())?.n || 0;
-  const previous = await db.prepare("SELECT value FROM chain_state WHERE key = 'float'").first().then((r) => (r ? JSON.parse(r.value) : null)).catch(() => null);
+  const previous = previous0;
   const insolvent = tokenUnits < owed - inFlight;
-  const snapshot = { at: now, chainId: settings.chainId, wallet: settings.casinoWallet, tokenUnits, ethWei: ethWei.toString(), owedUnits: owed, freeUnits: tokenUnits - owed, insolvent };
+  const snapshot = { at: now, chainId: settings.chainId, wallet: settings.casinoWallet, tokenUnits, safeTokenUnits: safe.units, safeBlock: safe.block, ethWei: ethWei.toString(), owedUnits: owed, freeUnits: tokenUnits - owed, insolvent };
   const hour = sqlTime(now).slice(0, 13);
   const statements = [db.prepare(`INSERT INTO chain_state (key, value) VALUES ('float', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`).bind(JSON.stringify(snapshot))];
   if (insolvent && previous?.insolvent) {

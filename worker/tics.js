@@ -133,9 +133,10 @@ export function decodeTransfers(logs, token, to) {
 export function transferLogsFilter(token, to, fromBlock, toBlock) {
   return { address: token, topics: [TRANSFER_TOPIC, null, pad32(to)], fromBlock: `0x${fromBlock.toString(16)}`, toBlock: `0x${toBlock.toString(16)}` };
 }
-export async function tokenBalance(rpc, token, owner) {
+export async function tokenBalance(rpc, token, owner, block = 'latest') {
   const data = encodeFunctionData({ abi: ERC20_ABI, functionName: 'balanceOf', args: [owner] });
-  return BigInt(await rpc('eth_call', [{ to: token, data }, 'latest']));
+  const tag = Number.isSafeInteger(block) ? `0x${block.toString(16)}` : block;
+  return BigInt(await rpc('eth_call', [{ to: token, data }, tag]));
 }
 export const transferData = (to, wei) => encodeFunctionData({ abi: ERC20_ABI, functionName: 'transfer', args: [getAddress(to), wei] });
 
