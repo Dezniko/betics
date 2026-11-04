@@ -16,7 +16,8 @@ export default function HowItWorksPage() {
   return <main className="terms-page how-page">
     <a className="terms-back" href="/">Back to the game</a>
     <img className="terms-logo" src="/brand/logo-480.webp" width="480" height="179" alt="qu-BETICS" />
-    <h1>How it works</h1>
+    <h1>How Qubetics Roulette works</h1>
+    <p>qu-BETICS is roulette for the Qubetics community, played with $TICS, the official Qubetics token on Ethereum.</p>
     <p>Everything you need to know about playing at qu-BETICS, in plain words.</p>
 
     {r?.live && <section className="how-live" data-testid="how-live">
@@ -31,7 +32,7 @@ export default function HowItWorksPage() {
       <a href={PINNED_WALLET_URL} target="_blank" rel="noopener noreferrer">See the casino wallet live on Etherscan</a>
     </section>}
 
-    <h2>The game</h2>
+    <h2>The game: roulette with Qubetics $TICS</h2>
     <p>qu-BETICS is European roulette: one wheel with 37 pockets, 0 to 36. Pick a chip, place it on the table and spin. A straight bet on one number pays 35 to 1, so you get back 36 times your stake. If the casino ever uses a table that pays less, the game shows you that table first and you play only after you accept it. Red or black, odd or even and 1 to 18 or 19 to 36 pay 1 to 1.</p>
 
     <h2>Demo and Real</h2>

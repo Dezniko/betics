@@ -18,6 +18,6 @@ export default function BrandLogo() {
     window.addEventListener('resize', check);
     return () => { ro?.disconnect(); window.removeEventListener('resize', check); };
   }, []);
-  return <h1 className="brand-logo"><span className="brand-logo-wrap" ref={wrapRef}><img src="/brand/logo-480.webp" srcSet="/brand/logo-480.webp 480w, /brand/logo-960.webp 960w" sizes="(max-width: 900px) 160px, 260px" width="480" height="179" alt="qu-BETICS" draggable="false" />
+  return <h1 className="brand-logo"><span className="brand-logo-wrap" ref={wrapRef}><img src="/brand/logo-480.webp" srcSet="/brand/logo-480.webp 480w, /brand/logo-960.webp 960w" sizes="(max-width: 900px) 160px, 260px" width="480" height="179" alt="qu-BETICS, Qubetics Roulette" draggable="false" />
     {fits && <span className="brand-beta" data-testid="brand-beta">BETA</span>}</span></h1>;
 }
