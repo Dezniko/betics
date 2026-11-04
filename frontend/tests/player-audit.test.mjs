@@ -176,14 +176,14 @@ test('history verify: money is checked against saved terms, without terms it say
 });
 
 // 8. Headers
-test('headers: _headers CSP equals the Worker CSP, only the Cloudflare analytics host besides self, COOP set', () => {
+test('headers: _headers CSP equals the Worker CSP, only the Cloudflare and Google analytics hosts besides self, COOP set', () => {
   const headersFile = readFileSync(new URL('../public/_headers', import.meta.url), 'utf8');
   const worker = readFileSync(new URL('../../worker/index.js', import.meta.url), 'utf8');
   const block = worker.match(/const CSP = \[([\s\S]*?)\]\.join\('; '\);/)[1];
   const csp = [...block.matchAll(/^\s*"([^"]+)",?\s*$/gm)].map((m) => m[1]).join('; ');
   assert.ok(headersFile.includes(`Content-Security-Policy: ${csp}`), '_headers carries the same CSP as the Worker');
-  assert.match(csp, /script-src 'self' https:\/\/static\.cloudflareinsights\.com;/); // the zone injects Web Analytics
-  assert.match(csp, /script-src 'self' https:\/\/static\.cloudflareinsights\.com(;|$)/);
+  assert.match(csp, /script-src 'self' https:\/\/static\.cloudflareinsights\.com https:\/\/www\.googletagmanager\.com;/); // Cloudflare Web Analytics and Google Analytics, nothing else
+  assert.doesNotMatch(csp, /script-src[^;]*unsafe-inline/);
   assert.match(headersFile, /Cross-Origin-Opener-Policy: same-origin-allow-popups/);
 });
 

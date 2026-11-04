@@ -51,8 +51,9 @@ function json(value, status = 200) { return Response.json(value, { status }); }
 // wallet logos, and the WalletConnect verify iframe.
 const CSP = [
   "default-src 'self'",
-  // Cloudflare Web Analytics is injected into the page by the zone, so its beacon script must be allowed.
-  "script-src 'self' https://static.cloudflareinsights.com",
+  // Cloudflare Web Analytics is injected into the page by the zone, so its beacon script must be allowed;
+  // Google Analytics loads gtag.js from Google Tag Manager (its setup lives in /ga.js, no inline script).
+  "script-src 'self' https://static.cloudflareinsights.com https://www.googletagmanager.com",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data: https://fonts.reown.com",

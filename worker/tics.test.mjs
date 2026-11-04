@@ -728,7 +728,7 @@ test('security headers: HSTS everywhere and a CSP on the HTML page', async () =>
     p.env.ASSETS = { fetch: async () => new Response('<!doctype html><title>x</title>', { headers: { 'Content-Type': 'text/html; charset=utf-8' } }) };
     const page = await worker.fetch(new Request(`https://${HOST}/`), p.env, { waitUntil() {} });
     const csp = page.headers.get('Content-Security-Policy');
-    assert.match(csp, /script-src 'self' https:\/\/static\.cloudflareinsights\.com(;|$)/);
+    assert.match(csp, /script-src 'self' https:\/\/static\.cloudflareinsights\.com https:\/\/www\.googletagmanager\.com(;|$)/);
     assert.doesNotMatch(csp, /unsafe-eval/);
     assert.match(csp, /frame-ancestors 'none'/);
     assert.match(page.headers.get('Strict-Transport-Security'), /max-age=31536000/);
