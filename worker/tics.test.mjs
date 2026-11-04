@@ -1894,3 +1894,18 @@ test('P1 a credit whose booking the cron closed as never-ran is refused, then cr
     assert.equal((await liabilityGap(p)).gap, 0);
   } finally { p.restore(); }
 });
+
+
+test('wallet sign in records the first touch the page sends on a new wallet player only', async () => {
+  const p = platform();
+  try {
+    const account = privateKeyToAccount(generatePrivateKey());
+    const n = await p.call('/api/wallet/nonce', { body: {} });
+    const message = createSiweMessage({ domain: HOST, address: account.address, uri: `https://${HOST}`, version: '1', chainId: 1, nonce: n.data.nonce, issuedAt: new Date(), statement: n.data.statement });
+    const r = await p.call('/api/wallet/verify', { body: { message, signature: await account.signMessage({ message }), firstTouch: { source: 'x.com', campaign: 'Spin Week' } } });
+    assert.equal(r.status, 200);
+    const row = p.rows('SELECT first_referrer, first_campaign FROM players WHERE id = ?', account.address.toLowerCase())[0] || p.rows('SELECT first_referrer, first_campaign FROM players WHERE wallet_address IS NOT NULL')[0];
+    assert.equal(row.first_referrer, 'x.com');
+    assert.equal(row.first_campaign, 'Spin Week');
+  } finally { p.restore(); }
+});

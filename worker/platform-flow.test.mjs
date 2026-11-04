@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID, randomBytes } from 'node:crypto';
 import worker, { DemoCasino } from './index.js';
-import { clearConfigCache } from './platform.js';
+import { clearConfigCache, firstTouch } from './platform.js';
 import { createD1 } from '../test-support/d1shim.mjs';
 
 const MIGRATIONS = ['0001_platform.sql', '0002_payments.sql', '0003_tics.sql', '0004_spin_holds.sql', '0005_audit_fixes.sql', '0006_admin.sql', '0007_r3.sql', '0008_reaudit.sql'].map((f) => new URL(`../migrations/${f}`, import.meta.url).pathname);
@@ -300,4 +300,21 @@ test('no player name and no account number: old /1 paths are gone, the session r
     const rounds = await p.call('/api/rounds', { cookie });
     assert.equal(rounds.status, 200);
   } finally { /* nothing to restore */ }
+});
+
+
+test('a new guest records the source and campaign the page sends, never this site or junk', async () => {
+  const p = platform();
+  const r = await p.call('/api/session', { body: { firstTouch: { source: 'Telegram', campaign: 'launch_week' } } });
+  assert.equal(r.status, 200);
+  const [player] = p.rows('SELECT first_referrer, first_campaign FROM players');
+  assert.equal(player.first_referrer, 'telegram');
+  assert.equal(player.first_campaign, 'launch_week');
+  const plain = platform();
+  await plain.call('/api/session', { body: {} });
+  assert.deepEqual({ ...plain.rows('SELECT first_referrer, first_campaign FROM players')[0] }, { first_referrer: null, first_campaign: null });
+  assert.deepEqual(firstTouch({ firstTouch: { source: 'www.betics.io', campaign: '<script>' } }), { referrer: null, campaign: null });
+  assert.deepEqual(firstTouch({ firstTouch: { source: 't.me', campaign: 'x'.repeat(65) } }), { referrer: 't.me', campaign: null });
+  assert.deepEqual(firstTouch({ firstTouch: { source: 42 } }), { referrer: null, campaign: null });
+  assert.deepEqual(firstTouch(null), { referrer: null, campaign: null });
 });

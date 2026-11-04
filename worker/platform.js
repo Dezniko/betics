@@ -37,6 +37,19 @@ export async function resolvePlayer(db, token) {
     WHERE i.kind = 'guest' AND i.value = ?`).bind(await sha256(token)).first();
 }
 
+// Where a new player came from, as sent by the page (the API request's own Referer is always this site).
+// source = utm_source, else the referring site's host; campaign = utm_campaign. Anything odd is dropped.
+export function firstTouch(body) {
+  const t = body && typeof body === 'object' ? body.firstTouch : null;
+  if (!t || typeof t !== 'object') return { referrer: null, campaign: null };
+  const source = typeof t.source === 'string' ? t.source.trim().toLowerCase() : '';
+  const campaign = typeof t.campaign === 'string' ? t.campaign.trim() : '';
+  return {
+    referrer: /^[a-z0-9][a-z0-9._-]{0,63}$/.test(source) && !/(^|\.)betics\.io$/.test(source) ? source : null,
+    campaign: /^[A-Za-z0-9][A-Za-z0-9 ._+-]{0,63}$/.test(campaign) ? campaign : null,
+  };
+}
+
 export async function createGuestPlayer(db, token, meta, extra = {}) {
   const id = crypto.randomUUID();
   await db.batch([

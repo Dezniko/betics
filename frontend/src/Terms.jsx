@@ -22,7 +22,7 @@ export function TermsPage() {
     <a className="terms-back" href="/">Back to the game</a>
     <img className="terms-logo" src="/brand/logo-480.webp" width="480" height="179" alt="qu-BETICS" />
     <h1>Terms</h1>
-    <p className="terms-updated">Last updated 30 October 2026</p>
+    <p className="terms-updated">Last updated 4 November 2026</p>
     <p>Please read these terms before you play. By opening the game, connecting a wallet, sending $TICS or placing a bet, you accept them in full. If you do not accept them, do not play.</p>
     <p>See also <a href="/how-it-works">How it works</a>, which explains in plain words how balances, the table limit and payouts work.</p>
 
@@ -71,6 +71,7 @@ export function TermsPage() {
     <h2>11. Your data</h2>
     <p>We collect your wallet address, connection data (such as country, device and browser), your email if you give it, and the public holdings of your wallet on the blockchain.</p>
     <p>We use this data to run the game, keep it safe, and to send you updates and marketing. You can remove your email or untick updates in your profile at any time.</p>
+    <p>We also use Google Analytics, which sets cookies, to see how people find and use the site, and we note which site or campaign link first brought you here.</p>
 
     <h2>12. Play responsibly</h2>
     <p>Set yourself a limit and take breaks. If playing stops being fun, stop. Never chase losses.</p>

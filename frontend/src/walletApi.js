@@ -2,6 +2,8 @@
 // The heavy wallet libraries (wagmi, viem, Reown AppKit) live in walletConnect.js
 // and are only downloaded when a player connects or tops up.
 
+import { readFirstTouch } from './firstTouch.js';
+
 const API = '/api';
 
 export class ApiError extends Error {
@@ -22,7 +24,7 @@ async function call(path, { method = 'GET', body } = {}) {
 
 export const walletApi = {
   nonce: () => call('/wallet/nonce', { method: 'POST', body: {} }),
-  verify: (message, signature) => call('/wallet/verify', { method: 'POST', body: { message, signature } }),
+  verify: (message, signature) => call('/wallet/verify', { method: 'POST', body: { message, signature, firstTouch: readFirstTouch() } }),
   logout: () => call('/wallet/logout', { method: 'POST', body: {} }),
   async me() {
     try {
@@ -35,7 +37,7 @@ export const walletApi = {
   depositCheck: (txHash) => call('/wallet/deposit/check', { method: 'POST', body: { txHash } }),
   withdrawQuote: () => call('/wallet/withdraw/quote'),
   withdraw: (amountCents, maxFeeCents, requestId) => call('/wallet/withdraw', { method: 'POST', body: { amountCents, maxFeeCents, requestId } }),
-  session: () => call('/session', { method: 'POST', body: {} }),
+  session: () => call('/session', { method: 'POST', body: { firstTouch: readFirstTouch() } }),
   wallet: () => call('/wallet'),
 };
 

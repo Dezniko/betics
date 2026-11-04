@@ -9,7 +9,7 @@ import { mathOption, STANDARD } from '../backend/src/games/rouletteMath.js';
 import { maxPayoutCents } from '../backend/src/games/roulette.js';
 import { checkRoundLimits } from './limits.js';
 import { isTronAddress, paymentSettings, providerReady, createProviderPayment, verifyIpn, mapProviderStatus } from './payments.js';
-import { resolvePlayer, createGuestPlayer, touchPlayer, requestMeta, recordEvent, loadGameConfig, publicConfig, triggerMessages, inbox, markInbox } from './platform.js';
+import { firstTouch, resolvePlayer, createGuestPlayer, touchPlayer, requestMeta, recordEvent, loadGameConfig, publicConfig, triggerMessages, inbox, markInbox } from './platform.js';
 import {
   WalletError, rateLimit, issueNonce, verifySiwe, contractVerifier, upsertWalletPlayer, createWalletSession, walletCookie, walletToken,
   resolveWalletPlayer, revokeWalletSession, profile, saveEmail, readFloat, freeFloatFrom, liveFloat, liveFloatCached, publicReserve, reserveSpinExposure, releaseSpinExposure, HOLD_KEEP_MS, checkDepositTx, chainTick, requestWithdrawal, refreshHoldings, withdrawalFee,
@@ -269,7 +269,7 @@ async function walletRoutes(request, env, ctx, url, meta, text, walletPlayer) {
     await rateLimit(db, 'verify', meta.ipHash);
     const body = parseBody(text);
     const address = await verifySiwe(db, env, body, { host: url.host, chainId: settings.chainId, verifyContract: contractVerifier(env, settings.chainId) });
-    const player = await upsertWalletPlayer(db, address, meta, { referrer: request.headers.get('Referer'), campaign: url.searchParams.get('utm_campaign') });
+    const player = await upsertWalletPlayer(db, address, meta, firstTouch(body));
     const token = await createWalletSession(db, address);
     await recordEvent(db, 'wallet_connect', { player, meta, gameId: 'roulette' }).catch(() => {});
     ctx?.waitUntil?.(refreshHoldings(env, player).catch((e) => console.error('holdings refresh failed', e)));
@@ -423,7 +423,9 @@ export default {
         await rateLimit(env.DB, 'session', meta.ipHash);
         // Unknown or missing cookie: always a brand-new opaque token, never a client-chosen one.
         token = generateServerSeed();
-        player = await createGuestPlayer(env.DB, token, meta, { referrer: request.headers.get('Referer'), campaign: url.searchParams.get('utm_campaign') });
+        let touch = { referrer: null, campaign: null };
+        try { touch = firstTouch(JSON.parse(text || '{}')); } catch { /* the DO answers a bad body */ }
+        player = await createGuestPlayer(env.DB, token, meta, touch);
         created = true;
       }
       if (isSession) {

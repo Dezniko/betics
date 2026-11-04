@@ -5,6 +5,10 @@ import { TermsPage } from './Terms.jsx';
 import HowItWorksPage from './HowItWorks.jsx';
 import { ensureAudioContext } from './sound.js';
 import './index.css';
+import { rememberFirstTouch } from './firstTouch.js';
+
+// Remember where this visitor came from before anything else runs (the admin traffic reports use it).
+rememberFirstTouch();
 
 // Browsers keep audio locked until a user gesture. Unlock it on the very
 // first tap/click/key anywhere so chip sounds work from the first chip, not
