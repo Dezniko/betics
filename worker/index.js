@@ -15,6 +15,7 @@ import {
   resolveWalletPlayer, revokeWalletSession, profile, saveEmail, readFloat, freeFloatFrom, liveFloat, liveFloatCached, publicReserve, reserveSpinExposure, releaseSpinExposure, HOLD_KEEP_MS, checkDepositTx, chainTick, requestWithdrawal, refreshHoldings, withdrawalFee,
 } from './wallet.js';
 import { ticsSettings, rpcClient, rpcUrl, formatTics } from './tics.js';
+import { pageFor, withPageHead, NOT_FOUND_HTML } from './seo.js';
 
 const COOKIE = '__Host-casino_demo';
 const MAX_BODY_BYTES = 32768;
@@ -82,7 +83,8 @@ function sameSecret(given, expected) {
 }
 function secured(response, api = true) {
   const headers = new Headers(response.headers);
-  headers.set('X-Robots-Tag', ROBOTS);
+  // API replies and non-page responses stay out of search; the player pages are indexable.
+  if (api) headers.set('X-Robots-Tag', ROBOTS);
   headers.set('X-Content-Type-Options', 'nosniff');
   headers.set('Referrer-Policy', 'same-origin');
   headers.set('Strict-Transport-Security', HSTS);
@@ -332,10 +334,33 @@ export default {
     const api = url.pathname === '/api' || url.pathname.startsWith('/api/');
     try {
       if (!api) {
-        const asset = await env.ASSETS.fetch(request);
+        // Player pages get their own head tags, so the stored file's ETag no longer describes the reply:
+        // drop conditional headers for them so the asset store always returns the full file.
+        let assetRequest = request;
+        if (pageFor(url.pathname) && (request.headers.has('If-None-Match') || request.headers.has('If-Modified-Since'))) {
+          const headers = new Headers(request.headers);
+          headers.delete('If-None-Match');
+          headers.delete('If-Modified-Since');
+          assetRequest = new Request(request.url, { method: request.method, headers });
+        }
+        const asset = await env.ASSETS.fetch(assetRequest);
         // A missing build file must be a 404, not the app page (which would be cached for a year as a script).
         if (url.pathname.startsWith('/assets/') && (asset.headers.get('Content-Type') || '').includes('text/html')) {
           return secured(new Response('Not found', { status: 404, headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' } }), false);
+        }
+        if ((asset.headers.get('Content-Type') || '').includes('text/html')) {
+          // The app fallback answers every unknown path with index.html. Only the three player pages are pages;
+          // anything else is a real 404, so search engines never index made-up addresses as copies of the game.
+          const page = pageFor(url.pathname);
+          if (!page || asset.status !== 200) {
+            const headers = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': ROBOTS };
+            return secured(new Response(request.method === 'HEAD' ? null : NOT_FOUND_HTML, { status: 404, headers }), false);
+          }
+          const headers = new Headers(asset.headers);
+          headers.delete('Content-Length');
+          headers.delete('ETag');
+          const body = request.method === 'HEAD' ? null : withPageHead(await asset.text(), page);
+          return secured(new Response(body, { status: 200, headers }), false);
         }
         return secured(asset, false);
       }

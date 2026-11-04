@@ -3,7 +3,6 @@
 # (WalletConnect relay, Reown, Coinbase, the wallet's own RPC) connect to endpoints and load
 # wallet logos from hosts that are not known in advance. Scripts stay 'self' only.
 /*
-  X-Robots-Tag: noindex, nofollow, noarchive, nosnippet
   X-Content-Type-Options: nosniff
   Referrer-Policy: same-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=()

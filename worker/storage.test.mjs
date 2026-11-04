@@ -262,12 +262,43 @@ test('HTTP edge rejects chunked oversized body before invoking Durable Object', 
   assert.equal(forwarded, false);
 });
 
-test('non-API asset responses get noindex headers without losing response fields', async () => {
-  const response = await worker.fetch(new Request('https://casino.example/roulette'), {
-    ASSETS: { async fetch() { return new Response('SPA', { status: 200, headers: { 'Content-Type': 'text/html', ETag: 'assets-etag' } }); } },
+test('player pages are indexable and carry their own head tags; unknown paths are 404', async () => {
+  const indexHtml = '<html><head><title>old</title></head><body></body></html>';
+  const ASSETS = { async fetch(req) {
+    assert.equal(req.headers.get('if-none-match'), null, 'page requests reach the asset store without conditional headers');
+    return new Response(req.method === 'HEAD' ? null : indexHtml, { status: 200, headers: { 'Content-Type': 'text/html', ETag: 'assets-etag' } });
+  } };
+  for (const [path, canonical] of [['/', '/'], ['/terms', '/terms'], ['/how-it-works/', '/how-it-works']]) {
+    const response = await worker.fetch(new Request(`https://www.betics.io${path}`, { headers: { 'If-None-Match': 'assets-etag' } }), { ASSETS });
+    assert.equal(response.status, 200, path);
+    assert.equal(response.headers.get('x-robots-tag'), null, path);
+    assert.equal(response.headers.get('etag'), null, 'the rewritten page has no stale ETag');
+    const html = await response.text();
+    assert.equal((html.match(/<title>/g) || []).length, 1);
+    assert.match(html, new RegExp(`<link rel="canonical" href="https://www\\.betics\\.io${canonical.replace(/\//g, '\\/')}" />`));
+    assert.match(html, /<meta name="description" content="[^"]*Qubetics[^"]*" \/>/);
+    assert.doesNotMatch(html, /noindex|18\+|[\u2013\u2014]/);
+  }
+  const home = await (await worker.fetch(new Request('https://www.betics.io/'), { ASSETS })).text();
+  assert.match(home, /<title>Qubetics Roulette · Play with \$TICS \| qu-BETICS<\/title>/);
+  for (const path of ['/roulette', '/sitemap.xm', '/voice/missing.mp3', '/terms/extra']) {
+    const response = await worker.fetch(new Request(`https://www.betics.io${path}`), { ASSETS });
+    assert.equal(response.status, 404, path);
+    assert.equal(response.headers.get('x-robots-tag'), 'noindex, nofollow, noarchive', path);
+    assert.match(await response.text(), /Page not found/);
+  }
+  const head = await worker.fetch(new Request('https://www.betics.io/terms', { method: 'HEAD' }), { ASSETS });
+  assert.equal(head.status, 200);
+  assert.equal(await head.text(), '');
+});
+
+test('non-page asset responses pass through without losing response fields', async () => {
+  const response = await worker.fetch(new Request('https://casino.example/robots.txt'), {
+    ASSETS: { async fetch() { return new Response('robots', { status: 200, headers: { 'Content-Type': 'text/plain', ETag: 'assets-etag' } }); } },
   });
   assert.equal(response.status, 200);
-  assert.equal(await response.text(), 'SPA');
+  assert.equal(await response.text(), 'robots');
   assert.equal(response.headers.get('etag'), 'assets-etag');
-  assert.equal(response.headers.get('x-robots-tag'), 'noindex, nofollow, noarchive');
+  assert.equal(response.headers.get('x-robots-tag'), null);
+  assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
 });

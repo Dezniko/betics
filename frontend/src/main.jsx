@@ -20,6 +20,4 @@ import './index.css';
 // increments and duplicate sound timers. Not needed for a local dev build.
 const terms = /^\/terms\/?$/.test(window.location.pathname);
 const how = /^\/how-it-works\/?$/.test(window.location.pathname);
-if (terms) document.title = 'qu-BETICS · Terms';
-if (how) document.title = 'qu-BETICS · How it works';
 ReactDOM.createRoot(document.getElementById('root')).render(terms ? <TermsPage /> : how ? <HowItWorksPage /> : <App />);
