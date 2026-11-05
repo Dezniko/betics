@@ -11,11 +11,11 @@ export const SYMBOLS = Object.freeze([
   { code: 'D', name: 'Qubetics' },
   { code: 'B', name: 'Gold bar' },
   { code: 'R', name: 'Ruby' },
-  { code: 'C', name: 'Coins' },
-  { code: 'A', name: 'A' },
-  { code: 'K', name: 'K' },
-  { code: 'Q', name: 'Q' },
-  { code: 'J', name: 'J' },
+  { code: 'C', name: 'Treasure chest' },
+  { code: 'A', name: 'Bitcoin' },
+  { code: 'K', name: 'Ethereum' },
+  { code: 'Q', name: 'Solana' },
+  { code: 'J', name: 'Tether' },
 ]);
 
 export const LINES = Object.freeze([

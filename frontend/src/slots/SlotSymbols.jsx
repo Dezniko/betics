@@ -1,5 +1,5 @@
 // Gods of Power symbols: original inline SVG, dark luxury palette (steel, gold for money, neon purple,
-// blue and cyan as accents). One component per symbol code; every one carries the symbol name as its label.
+// blue and cyan as accents) plus four crypto coins carrying their real marks. One component per symbol code; every one carries the symbol name as its label.
 // No symbol has a plaque or a border: everything floats on the dark reel with its own coloured glow.
 import { symbolName } from '../../../backend/src/games/slotsMath.js';
 
@@ -27,8 +27,12 @@ const Shine = ({ clip, id }) => <g clipPath={`url(#${clip})`}>
 </g>;
 
 // Gods of Power (wild, the top paying symbol): the owner's cartoon portrait (used with permission),
-// a gold ring with neon glow. Rendered as an image, not SVG.
-export const GodsOfPower = () => <img className="slot-sym slot-sym-W slot-sym-img" src="/slots/gods-of-power.webp" width="512" height="512" alt={symbolName('W')} draggable="false" />;
+// a gold ring with neon glow, rendered as an image. A small gold WILD ribbon sits on the lower part of
+// the ring so players know it is the wild; it scales with the symbol (see .slot-wild-tag in slots.css).
+export const GodsOfPower = () => <span className="slot-sym slot-sym-W slot-sym-wild" role="img" aria-label={symbolName('W')}>
+  <img className="slot-sym-img" src="/slots/gods-of-power.webp" width="512" height="512" alt="" draggable="false" />
+  <i className="slot-wild-tag" aria-hidden="true">WILD</i>
+</span>;
 
 // Golden key: kept as spare art.
 export const GoldenKey = () => <Svg code="W" defs={<>
@@ -115,73 +119,147 @@ export const Ruby = () => <Svg code="R" defs={<>
   <Star x="28" y="24" r="4.5" delay={0.9} /><Star x="78" y="70" r="3.5" delay={2.1} color="#ffd6e4" /><Star x="72" y="26" r="2.6" delay={3.3} />
 </Svg>;
 
-// Coin stack: five gold coins with bright rims, the top one face up with an embossed star and a specular.
-const COIN_CLIP = 'gp-coin-clip';
-export const CoinStack = () => <Svg code="C" defs={<>
-  <linearGradient id="gp-coin" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stopColor="#8d6a1c" /><stop offset=".35" stopColor="#f6d784" /><stop offset=".6" stopColor="#f1c860" /><stop offset="1" stopColor="#8d6a1c" /></linearGradient>
-  <radialGradient id="gp-coin-face" cx=".4" cy=".35" r=".8"><stop offset="0" stopColor="#fff6d2" /><stop offset=".55" stopColor="#efc55a" /><stop offset="1" stopColor="#a67b20" /></radialGradient>
-  <clipPath id={COIN_CLIP}><rect x="20" y="28" width="60" height="62" rx="6" /></clipPath>
+// Treasure chest: dark wood with gold bands and a gold lock plate, the lid raised a little so gold
+// light pours out of the gap with coins and a gem spilling over the front. Cyan and purple neon rim lights.
+const CHEST_CLIP = 'gp-chest-clip';
+export const TreasureChest = () => <Svg code="C" defs={<>
+  <linearGradient id="gp-chest-wood" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#6b3d1a" /><stop offset=".5" stopColor="#3f2210" /><stop offset="1" stopColor="#221006" /></linearGradient>
+  <linearGradient id="gp-chest-lid" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#8a5224" /><stop offset=".6" stopColor="#4a2812" /><stop offset="1" stopColor="#2a1407" /></linearGradient>
+  <linearGradient id="gp-chest-gold" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#fff1c0" /><stop offset=".4" stopColor="#f1c860" /><stop offset=".8" stopColor="#b8851d" /><stop offset="1" stopColor="#e8bd55" /></linearGradient>
+  <linearGradient id="gp-chest-gold-h" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stopColor="#9a6a14" /><stop offset=".5" stopColor="#ffe59a" /><stop offset="1" stopColor="#9a6a14" /></linearGradient>
+  <linearGradient id="gp-chest-light" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#fff7d6" stopOpacity=".95" /><stop offset=".6" stopColor="#ffd56a" stopOpacity=".8" /><stop offset="1" stopColor="#ffb02e" stopOpacity=".35" /></linearGradient>
+  <radialGradient id="gp-chest-beam" cx=".5" cy="1" r=".75"><stop offset="0" stopColor="#ffe9a8" stopOpacity=".95" /><stop offset=".45" stopColor="#ffcc4d" stopOpacity=".45" /><stop offset="1" stopColor="#ffb02e" stopOpacity="0" /></radialGradient>
+  <radialGradient id="gp-chest-coin" cx=".4" cy=".35" r=".8"><stop offset="0" stopColor="#fff6d2" /><stop offset=".55" stopColor="#efc55a" /><stop offset="1" stopColor="#a67b20" /></radialGradient>
+  <linearGradient id="gp-chest-gem" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#ffd3e4" /><stop offset=".45" stopColor="#ff2f66" /><stop offset="1" stopColor="#8a0626" /></linearGradient>
+  <clipPath id={CHEST_CLIP}><path d="M14 56q0-6 6-6h60q6 0 6 6v30q0 4-4 4H18q-4 0-4-4z" /><path d="M14 40V36q0-20 36-20t36 20v4z" transform="translate(0 -3) rotate(-7 84 40)" /></clipPath>
 </>}>
-  <Glow id="gp-coin-glow" color="#f1c860" cy="60" rx="42" ry="34" />
-  {[80, 71, 62, 53].map((y, i) => <g key={y}>
-    <rect x="20" y={y - 7} width="60" height="12" rx="2" fill="url(#gp-coin)" />
-    <ellipse cx="50" cy={y - 7} rx="30" ry="7.5" fill={i % 2 ? '#eec45e' : '#e7bb55'} stroke="#7d5a12" strokeWidth="1" />
-    <path d={`M23 ${y - 1}h54`} stroke="#fff0c0" strokeWidth=".9" opacity=".35" />
-  </g>)}
-  <rect x="20" y="38" width="60" height="12" rx="2" fill="url(#gp-coin)" />
-  <ellipse cx="50" cy="38" rx="30" ry="9.5" fill="url(#gp-coin-face)" stroke="#7d5a12" strokeWidth="1.2" />
-  <ellipse cx="50" cy="38" rx="22" ry="6.5" fill="none" stroke="#b68a2a" strokeWidth="1.2" />
-  <path d="M50 32l1.8 3.6 4 .5-2.9 2.8.7 4L50 41l-3.6 1.9.7-4-2.9-2.8 4-.5z" fill="#b38322" opacity=".85" />
-  <path d="M28 32q10-5 22-4" stroke="#fffaf0" strokeWidth="2.4" strokeLinecap="round" fill="none" opacity=".95" />
-  <Shine clip={COIN_CLIP} id="gp-coin" />
-  <Star x="24" y="30" r="4" delay={1.2} /><Star x="80" y="56" r="3.2" delay={2.5} color="#fff3c4" /><Star x="36" y="84" r="2.4" delay={0.2} />
+  <Glow id="gp-chest-glow" color="#f1c860" cy="52" rx="44" ry="40" />
+  <ellipse cx="50" cy="90" rx="36" ry="4" fill="#000" opacity=".45" />
+  {/* light pouring from the gap, behind everything */}
+  <ellipse cx="50" cy="48" rx="40" ry="18" fill="url(#gp-chest-beam)" />
+  {/* body */}
+  <path d="M14 56q0-6 6-6h60q6 0 6 6v30q0 4-4 4H18q-4 0-4-4z" fill="url(#gp-chest-wood)" />
+  <path d="M36 50v40M64 50v40" stroke="#1a0c04" strokeWidth="1.2" opacity=".7" />
+  <path d="M20 50h60" stroke="#8a5224" strokeWidth="1.2" opacity=".9" />
+  {/* gold bands and lock */}
+  <rect x="21" y="50" width="8" height="40" fill="url(#gp-chest-gold)" /><rect x="71" y="50" width="8" height="40" fill="url(#gp-chest-gold)" />
+  <rect x="14" y="83" width="72" height="4" fill="url(#gp-chest-gold-h)" />
+  <rect x="42" y="50" width="16" height="17" rx="3" fill="url(#gp-chest-gold)" stroke="#6b4a0c" strokeWidth=".8" />
+  <path d="M50 54.5a2.6 2.6 0 0 1 1.6 4.7L53 63h-6l1.4-3.8A2.6 2.6 0 0 1 50 54.5z" fill="#1d1006" />
+  <path d="M22.5 52v36M72.5 52v36" stroke="#fff3cf" strokeWidth="1" opacity=".55" />
+  {/* the gap: bright light with coins and a gem in it */}
+  <rect x="17" y="34" width="66" height="18" fill="url(#gp-chest-light)" />
+  <ellipse cx="50" cy="46" rx="30" ry="9" fill="#fff6d0" opacity=".75" />
+  <circle cx="30" cy="49" r="4.6" fill="url(#gp-chest-coin)" stroke="#8a6414" strokeWidth=".7" />
+  <circle cx="41" cy="47.5" r="5" fill="url(#gp-chest-coin)" stroke="#8a6414" strokeWidth=".7" />
+  <circle cx="62" cy="47" r="5.2" fill="url(#gp-chest-coin)" stroke="#8a6414" strokeWidth=".7" />
+  <circle cx="72" cy="49.5" r="4.4" fill="url(#gp-chest-coin)" stroke="#8a6414" strokeWidth=".7" />
+  <path d="M51 38l7 6-7 9-7-9z" fill="url(#gp-chest-gem)" stroke="#ffd6e2" strokeWidth=".9" strokeLinejoin="round" />
+  <path d="M47 43h8" stroke="#fff" strokeWidth=".9" opacity=".8" />
+  {/* coins spilling over the front edge */}
+  <ellipse cx="33" cy="54" rx="6" ry="3.4" fill="url(#gp-chest-coin)" stroke="#8a6414" strokeWidth=".7" transform="rotate(-18 33 54)" />
+  <ellipse cx="66" cy="55" rx="6" ry="3.4" fill="url(#gp-chest-coin)" stroke="#8a6414" strokeWidth=".7" transform="rotate(16 66 55)" />
+  <ellipse cx="86" cy="86" rx="5.5" ry="3.2" fill="url(#gp-chest-coin)" stroke="#8a6414" strokeWidth=".7" transform="rotate(-10 86 86)" />
+  <ellipse cx="13" cy="88" rx="5" ry="3" fill="url(#gp-chest-coin)" stroke="#8a6414" strokeWidth=".7" transform="rotate(12 13 88)" />
+  {/* lid, raised and tilted back on its right hinge */}
+  <g transform="translate(0 -3) rotate(-7 84 40)">
+    <ellipse cx="50" cy="41" rx="34" ry="3.5" fill="#1a0c04" />
+    <path d="M14 40V36q0-20 36-20t36 20v4z" fill="url(#gp-chest-lid)" />
+    <path d="M21 40V30.5q3-9 8-11.3V40zM71 40V30.5q-3-9-8-11.3V40z" fill="url(#gp-chest-gold)" />
+    <rect x="14" y="38" width="72" height="4" rx="1" fill="url(#gp-chest-gold-h)" />
+    <path d="M20 32q6-12 30-13" stroke="#c98a45" strokeWidth="1.2" strokeLinecap="round" fill="none" opacity=".8" />
+    <path d="M20 32q6-12 30-13" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" fill="none" opacity=".55" />
+    <path d="M14 40V36q0-20 36-20" stroke="#22d3ff" strokeWidth="1.6" strokeLinecap="round" fill="none" opacity=".85" />
+  </g>
+  {/* neon rim light on the body */}
+  <path d="M86 56v30q0 4-4 4" stroke="#a63cff" strokeWidth="1.6" strokeLinecap="round" fill="none" opacity=".85" />
+  <Shine clip={CHEST_CLIP} id="gp-chest" />
+  <Star x="52" y="36" r="5" delay={0.3} color="#fff7d6" /><Star x="84" y="48" r="3.4" delay={1.7} color="#fff3c4" /><Star x="20" y="60" r="2.8" delay={2.9} />
 </Svg>;
 
-// Royals: big glossy jewel letters, each its own neon colour, bevelled faces with an inner light, a hot
-// specular, a thin bright rim (no plaque), sparkles and a soft coloured glow. Read clearly at 60 px.
-const LETTERS = {
-  A: { d: 'M50 12L84 88H66L60 73H40L34 88H16ZM50 38L44 58H56Z', hole: true, light: '#f4d2ff', mid: '#b452ff', deep: '#4b0b90', rim: '#f3d9ff', glow: '#a63cff', stars: [[22, 26], [80, 34], [64, 84]] },
-  K: { d: 'M20 12H37V42L60 12H81L52 47L83 88H62L41 59L37 64V88H20Z', light: '#e9fcff', mid: '#2fd6ff', deep: '#064f80', rim: '#dafaff', glow: '#22d3ff', stars: [[76, 20], [26, 78], [66, 62]] },
-  Q: { d: 'M50 12C69 12 82 27 82 48C82 69 69 84 50 84C31 84 18 69 18 48C18 27 31 12 50 12ZM50 28C40 28 35 36 35 48C35 60 40 68 50 68C60 68 65 60 65 48C65 36 60 28 50 28Z', hole: true, tail: 'M58 60L82 82L70 92L50 72Z', light: '#ffd8ee', mid: '#ff3fb2', deep: '#7b0a50', rim: '#ffdcf1', glow: '#ff3fb2', stars: [[22, 22], [80, 30], [34, 82]] },
-  J: { d: 'M62 12H80V58C80 76 69 88 52 88C37 88 27 79 25 64L42 60C43 68 47 73 53 73C59 73 62 69 62 58Z', light: '#fff6cf', mid: '#f7c843', deep: '#8a5706', rim: '#fff1bf', glow: '#f1c860', stars: [[30, 24], [84, 70], [40, 90]] },
+// Crypto coins (A, K, Q, J): thick glossy 3D coins with a reeded edge, a bevelled rim, an inner
+// shadow, a specular sweep, sparkles and a soft coloured glow, each carrying its real mark: Bitcoin,
+// Ethereum, Solana and Tether. The face is centred on (50, 47) with the edge showing below it.
+const COINS = {
+  A: { face: ['#ffd27a', '#f7931a', '#b95a05'], rim: ['#ffe2a8', '#ff9b22', '#c86a08'], edge: ['#e08a16', '#6e3703'], glow: '#ff9f2e', stars: [[22, 24], [80, 32], [66, 84]] },
+  K: { face: ['#9fb0ff', '#4b5fe0', '#1b2270'], rim: ['#d6dcff', '#6f80ff', '#3540b0'], edge: ['#4b58d8', '#12165a'], glow: '#6b7cff', stars: [[76, 20], [26, 78], [66, 64]] },
+  Q: { face: ['#3d4258', '#15171f', '#040406'], rim: ['#e3e6f2', '#8f95ab', '#3f4457'], edge: ['#5a6078', '#0b0d14'], glow: '#9945ff', stars: [[22, 22], [80, 30], [34, 84]] },
+  J: { face: ['#86ecc6', '#26a17b', '#0b5a3f'], rim: ['#d4fff0', '#4ad0a0', '#1a8a66'], edge: ['#209a74', '#073a29'], glow: '#2fd49a', stars: [[30, 24], [84, 70], [40, 90]] },
 };
-const Letter = ({ code }) => {
-  const L = LETTERS[code], id = `gp-${code}`, clip = `${id}-clip`;
-  const fill = L.hole ? 'evenodd' : 'nonzero';
+const COIN_CX = 50, COIN_CY = 47, COIN_R = 37, COIN_DEPTH = 6;
+
+// Bitcoin: the white B tilted 14 degrees, with the two vertical strokes above and below.
+const BitcoinMark = () => <g fill="#fff" stroke="#fff" transform={`rotate(14 ${COIN_CX} ${COIN_CY}) translate(${COIN_CX} ${COIN_CY}) scale(.86) translate(${-COIN_CX} ${-COIN_CY})`}>
+  <rect x="42.5" y="20" width="4.6" height="9" rx="1" stroke="none" /><rect x="51.5" y="20" width="4.6" height="9" rx="1" stroke="none" />
+  <rect x="42.5" y="65" width="4.6" height="9" rx="1" stroke="none" /><rect x="51.5" y="65" width="4.6" height="9" rx="1" stroke="none" />
+  <rect x="36.5" y="27" width="7.5" height="40" rx="1" stroke="none" />
+  <path d="M40 30.75H54.5a8.75 8.75 0 0 1 0 17.5H40" fill="none" strokeWidth="7.5" />
+  <path d="M40 48.25H57a9.25 9.25 0 0 1 0 18.5H40" fill="none" strokeWidth="7.5" />
+</g>;
+
+// Ethereum: the two tone diamond, lighter on the left, darker on the right.
+const EthereumMark = () => <g>
+  <polygon points="50,16 30,51 50,63" fill="#ffffff" />
+  <polygon points="50,16 70,51 50,63" fill="#c9d1ff" />
+  <polygon points="50,38 30,51 50,63" fill="#e9ecff" opacity=".9" />
+  <polygon points="50,38 70,51 50,63" fill="#aab5ff" />
+  <polygon points="50,69 30,55.5 50,80" fill="#ffffff" />
+  <polygon points="50,69 70,55.5 50,80" fill="#c9d1ff" />
+</g>;
+
+// Solana: three slanted bars, teal at the bottom left to purple at the top right.
+const SolanaMark = () => <g fill="url(#gp-Q-mark)">
+  <polygon points="32,31.5 70,31.5 62,40 24,40" />
+  <polygon points="24,42.75 62,42.75 70,51.25 32,51.25" />
+  <polygon points="32,54 70,54 62,62.5 24,62.5" />
+</g>;
+
+// Tether: the white T whose crossbar sits on a disc, the stem running down through the ring.
+const TetherMark = () => <g>
+  <ellipse cx="50" cy="40.5" rx="21" ry="7.2" fill="#fff" />
+  <ellipse cx="50" cy="41" rx="15.5" ry="3.9" fill="#26a17b" />
+  <rect x="44.5" y="25" width="11" height="45" rx="1.5" fill="#fff" />
+  <rect x="29" y="24" width="42" height="9" rx="1.5" fill="#fff" />
+</g>;
+
+const COIN_MARKS = { A: BitcoinMark, K: EthereumMark, Q: SolanaMark, J: TetherMark };
+
+const Coin = ({ code }) => {
+  const C = COINS[code], id = `gp-${code}`, clip = `${id}-clip`, Mark = COIN_MARKS[code];
+  const faceR = COIN_R - 6;
   return <Svg code={code} defs={<>
-    <linearGradient id={`${id}-face`} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={L.light} /><stop offset=".42" stopColor={L.mid} /><stop offset=".8" stopColor={L.deep} /><stop offset="1" stopColor={L.mid} /></linearGradient>
-    <radialGradient id={`${id}-inner`} cx=".5" cy=".38" r=".62"><stop offset="0" stopColor="#fff" stopOpacity=".55" /><stop offset=".5" stopColor={L.light} stopOpacity=".15" /><stop offset="1" stopColor={L.deep} stopOpacity="0" /></radialGradient>
-    <linearGradient id={`${id}-top`} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#fff" stopOpacity=".65" /><stop offset="1" stopColor="#fff" stopOpacity="0" /></linearGradient>
-    <linearGradient id={`${id}-depth`} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={L.deep} /><stop offset="1" stopColor="#120518" /></linearGradient>
-    <radialGradient id={`${id}-spec`} cx=".5" cy=".5" r=".5"><stop offset="0" stopColor="#fff" stopOpacity=".95" /><stop offset=".5" stopColor="#fff" stopOpacity=".35" /><stop offset="1" stopColor="#fff" stopOpacity="0" /></radialGradient>
-    <clipPath id={clip}><path d={L.d} clipRule={fill} />{L.tail && <path d={L.tail} />}</clipPath>
+    <radialGradient id={`${id}-face`} cx=".36" cy=".3" r=".85"><stop offset="0" stopColor={C.face[0]} /><stop offset=".5" stopColor={C.face[1]} /><stop offset="1" stopColor={C.face[2]} /></radialGradient>
+    <linearGradient id={`${id}-rim`} x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor={C.rim[0]} /><stop offset=".45" stopColor={C.rim[1]} /><stop offset=".75" stopColor={C.rim[2]} /><stop offset="1" stopColor={C.rim[0]} /></linearGradient>
+    <linearGradient id={`${id}-edge`} x1="0" y1="0" x2="1" y2="0"><stop offset="0" stopColor={C.edge[1]} /><stop offset=".5" stopColor={C.edge[0]} /><stop offset="1" stopColor={C.edge[1]} /></linearGradient>
+    <radialGradient id={`${id}-inner`} cx=".5" cy=".5" r=".5"><stop offset=".72" stopColor="#000" stopOpacity="0" /><stop offset="1" stopColor="#000" stopOpacity=".5" /></radialGradient>
+    <linearGradient id={`${id}-top`} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#fff" stopOpacity=".5" /><stop offset="1" stopColor="#fff" stopOpacity="0" /></linearGradient>
+    {code === 'Q' && <linearGradient id="gp-Q-mark" gradientUnits="userSpaceOnUse" x1="24" y1="62" x2="70" y2="32"><stop offset="0" stopColor="#00ffa3" /><stop offset=".5" stopColor="#5fd0d8" /><stop offset="1" stopColor="#dc1fff" /></linearGradient>}
+    <clipPath id={clip}><circle cx={COIN_CX} cy={COIN_CY} r={COIN_R} /></clipPath>
   </>}>
-    <Glow id={`${id}-glow`} color={L.glow} cy="52" rx="42" ry="40" />
-    {/* depth: the jewel's thick base, offset down */}
-    <g transform="translate(0 4)">
-      <path d={L.d} fillRule={fill} fill={`url(#${id}-depth)`} />
-      {L.tail && <path d={L.tail} fill={`url(#${id}-depth)`} />}
-    </g>
-    {/* face */}
-    <path d={L.d} fillRule={fill} fill={`url(#${id}-face)`} />
-    {L.tail && <path d={L.tail} fill={`url(#${id}-face)`} />}
-    {/* inner light and the bevelled top half */}
-    <g clipPath={`url(#${clip})`}>
-      <rect x="0" y="0" width="100" height="100" fill={`url(#${id}-inner)`} />
-      <rect x="0" y="0" width="100" height="46" fill={`url(#${id}-top)`} />
-      <ellipse cx="38" cy="26" rx="12" ry="7" fill={`url(#${id}-spec)`} transform="rotate(-22 38 26)" />
-    </g>
-    {/* thin bright rim */}
-    <path d={L.d} fillRule={fill} fill="none" stroke={L.rim} strokeWidth="1.8" strokeLinejoin="round" opacity=".9" />
-    {L.tail && <path d={L.tail} fill="none" stroke={L.rim} strokeWidth="1.8" strokeLinejoin="round" opacity=".9" />}
+    <Glow id={`${id}-glow`} color={C.glow} cy="52" rx="44" ry="42" />
+    {/* the thick edge below the face, with reeding */}
+    <circle cx={COIN_CX} cy={COIN_CY + COIN_DEPTH} r={COIN_R} fill={`url(#${id}-edge)`} />
+    <circle cx={COIN_CX} cy={COIN_CY + COIN_DEPTH} r={COIN_R - 1.5} fill="none" stroke="#000" strokeOpacity=".45" strokeWidth="3" strokeDasharray="1.4 1.9" />
+    <ellipse cx={COIN_CX} cy={COIN_CY + COIN_DEPTH + COIN_R - 1} rx="22" ry="1.6" fill="#fff" opacity=".18" />
+    {/* bevelled rim and the face */}
+    <circle cx={COIN_CX} cy={COIN_CY} r={COIN_R} fill={`url(#${id}-rim)`} />
+    <circle cx={COIN_CX} cy={COIN_CY} r={faceR + .6} fill="#000" opacity=".35" />
+    <circle cx={COIN_CX} cy={COIN_CY} r={faceR} fill={`url(#${id}-face)`} />
+    <circle cx={COIN_CX} cy={COIN_CY} r={faceR} fill={`url(#${id}-inner)`} />
+    {/* a soft top light on the face, behind the mark so the mark stays crisp */}
+    <ellipse cx="38" cy="28" rx="16" ry="7" fill="#fff" opacity=".2" transform="rotate(-28 38 28)" clipPath={`url(#${clip})`} />
+    <Mark />
+    {/* bevel highlight on the top half of the rim */}
+    <path d={`M${COIN_CX - COIN_R} ${COIN_CY}A${COIN_R} ${COIN_R} 0 0 1 ${COIN_CX + COIN_R} ${COIN_CY}`} fill="none" stroke="#fff" strokeWidth="2.2" opacity=".55" clipPath={`url(#${clip})`} />
+    <circle cx={COIN_CX} cy={COIN_CY} r={COIN_R - .8} fill="none" stroke="#fff" strokeWidth="1" opacity=".35" />
     <Shine clip={clip} id={id} />
-    {L.stars.map(([x, y], i) => <Star key={i} x={x} y={y} r={i === 0 ? 5 : i === 1 ? 3.6 : 2.6} delay={i * 1.1 + (code.charCodeAt(0) % 4) * 0.3} color={i === 1 ? L.light : '#ffffff'} />)}
+    {C.stars.map(([x, y], i) => <Star key={i} x={x} y={y} r={i === 0 ? 5 : i === 1 ? 3.6 : 2.6} delay={i * 1.1 + (code.charCodeAt(0) % 4) * 0.3} color={i === 1 ? C.rim[0] : '#ffffff'} />)}
   </Svg>;
 };
-export const LetterA = () => <Letter code="A" />;
-export const LetterK = () => <Letter code="K" />;
-export const LetterQ = () => <Letter code="Q" />;
-export const LetterJ = () => <Letter code="J" />;
+export const Bitcoin = () => <Coin code="A" />;
+export const Ethereum = () => <Coin code="K" />;
+export const Solana = () => <Coin code="Q" />;
+export const Tether = () => <Coin code="J" />;
 
 // Qubetics (top regular symbol): the official Qubetics logo (used with permission), soft glow only.
 export const Qubetics = () => <img className="slot-sym slot-sym-D slot-sym-img" src="/slots/qubetics.webp" width="512" height="512" alt={symbolName('D')} draggable="false" />;
@@ -192,11 +270,11 @@ export const SYMBOL_COMPONENTS = Object.freeze({
   D: Qubetics,
   B: GoldBar,
   R: Ruby,
-  C: CoinStack,
-  A: LetterA,
-  K: LetterK,
-  Q: LetterQ,
-  J: LetterJ,
+  C: TreasureChest,
+  A: Bitcoin,
+  K: Ethereum,
+  Q: Solana,
+  J: Tether,
 });
 
 export function SlotSymbol({ code }) {
