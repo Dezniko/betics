@@ -280,8 +280,10 @@ test('player pages are indexable and carry their own head tags; unknown paths ar
     assert.doesNotMatch(html, /noindex|18\+|[\u2013\u2014]/);
   }
   const home = await (await worker.fetch(new Request('https://www.betics.io/'), { ASSETS })).text();
-  assert.match(home, /<title>Qubetics Roulette · Play with \$TICS \| qu-BETICS<\/title>/);
-  for (const path of ['/roulette', '/sitemap.xm', '/voice/missing.mp3', '/terms/extra']) {
+  assert.match(home, /<title>Qubetics Casino · Roulette and Slots with \$TICS \| qu-BETICS<\/title>/);
+  const roulette = await (await worker.fetch(new Request('https://www.betics.io/roulette'), { ASSETS })).text();
+  assert.match(roulette, /<title>Qubetics Roulette · Play with \$TICS \| qu-BETICS<\/title>/);
+  for (const path of ['/blackjack', '/sitemap.xm', '/voice/missing.mp3', '/terms/extra']) {
     const response = await worker.fetch(new Request(`https://www.betics.io${path}`), { ASSETS });
     assert.equal(response.status, 404, path);
     assert.equal(response.headers.get('x-robots-tag'), 'noindex, nofollow, noarchive', path);

@@ -372,7 +372,7 @@ export default {
           const headers = new Headers(asset.headers);
           headers.delete('Content-Length');
           headers.delete('ETag');
-          if (page.noindex) headers.set('X-Robots-Tag', ROBOTS);
+          if (page.noindex || env.NOINDEX_ALL === 'true') headers.set('X-Robots-Tag', ROBOTS);
           const body = request.method === 'HEAD' ? null : withPageHead(await asset.text(), page);
           return secured(new Response(body, { status: 200, headers }), false);
         }

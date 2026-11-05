@@ -150,12 +150,13 @@ test('config: the slot game loads, its public config carries the published maths
   } finally { p.restore(); }
 });
 
-test('the /godsofpower page is served as the app with noindex and is not a search page', () => {
-  const page = pageFor('/godsofpower');
-  assert.equal(page.noindex, true);
-  assert.match(withPageHead('<html><head><title>x</title></head></html>', page), /noindex, nofollow/);
-  assert.equal(pageFor('/').noindex, undefined);
+test('the /godsofpower and /roulette pages are search pages with their own titles; unknown paths are not pages', () => {
+  assert.match(pageFor('/godsofpower').title, /Gods of Power/);
+  assert.match(pageFor('/roulette').title, /Roulette/);
+  assert.match(pageFor('/').title, /Casino/);
+  assert.equal(pageFor('/godsofpower').noindex, undefined);
   assert.equal(pageFor('/godsofpower/anything'), null);
+  assert.ok(!withPageHead('<html><head><title>x</title></head></html>', pageFor('/godsofpower')).includes('noindex'));
 });
 
 test('demo round: money moves once, the round is stored, and the revealed seed reproduces every stop', async () => {

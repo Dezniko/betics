@@ -4,8 +4,16 @@ export const SITE = 'https://www.betics.io';
 
 export const PAGES = {
   '/': {
+    title: 'Qubetics Casino · Roulette and Slots with $TICS | qu-BETICS',
+    description: 'Play roulette and the Gods of Power slot with $TICS, the Qubetics token on Ethereum. Connect your wallet, top up and play. Every round is provably fair and you can check it yourself.',
+  },
+  '/roulette': {
     title: 'Qubetics Roulette · Play with $TICS | qu-BETICS',
     description: 'Play roulette with $TICS, the Qubetics token on Ethereum. Connect your wallet, top up and spin. Every spin is provably fair and you can check it.',
+  },
+  '/godsofpower': {
+    title: 'Gods of Power · Qubetics $TICS Slot | qu-BETICS',
+    description: 'Gods of Power, a five reel, 20 line slot with free spins, played with $TICS, the Qubetics token. Payback 92%, every round provably fair and checked in your browser.',
   },
   '/how-it-works': {
     title: 'How It Works · qu-BETICS Qubetics $TICS Roulette',
@@ -17,13 +25,8 @@ export const PAGES = {
   },
 };
 
-// Pages served by the app but kept out of search (not in the sitemap, noindex): the slot while it is in testing.
-export const HIDDEN_PAGES = {
-  '/godsofpower': {
-    title: 'Gods of Power · qu-BETICS',
-    description: 'Gods of Power, a five reel slot played with $TICS on qu-BETICS.',
-  },
-};
+// Pages served by the app but kept out of search (none at the moment; add a path here to serve it with noindex).
+export const HIDDEN_PAGES = {};
 
 // '/terms/' and '/terms' are the same page; anything else is not a page.
 export function pageFor(pathname) {
