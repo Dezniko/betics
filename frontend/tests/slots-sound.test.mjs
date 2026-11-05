@@ -262,13 +262,13 @@ test('a missing voice clip is silent, never throws and is not fetched again; mut
   sound.__setVoiceLoader();
 });
 
-test('portraitLand plays a gold hit plus the POWER clip, at most once per 1.2 s', async () => {
+test('portraitLand plays a gold hit with no voice clip, at most once per 1.2 s', async () => {
   const ctx = withEngine(fakeContext());
   voiceLoader({ power: 0.7 });
   sound.portraitLand(); await tick(); await tick();
   const started = ctx.sources.filter(s => s.started !== null);
-  assert.ok(started.length >= 4, 'impact layers scheduled');
-  assert.ok(started.some(s => s.kind === 'buffer' && s.buffer?.fake), 'the POWER clip plays');
+  assert.ok(started.length >= 3, 'impact layers scheduled');
+  assert.ok(!started.some(s => s.kind === 'buffer' && s.buffer?.fake), 'no voice clip plays for the portrait');
   assert.ok(started.every(s => reaches(s, ctx.output)));
   const n = ctx.sources.length;
   ctx.currentTime = 0.22; sound.portraitLand(); await tick(); await tick();

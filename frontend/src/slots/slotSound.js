@@ -14,7 +14,7 @@
 //   countTick(progress)       win amount counting up (0 to 1)
 //   voice(name, {queue})      a recorded clip from /slots/voice/<name>.mp3 (optional file: missing = silent);
 //                             a new voice stops the one playing unless queue is true (then it follows it)
-//   portraitLand()            the Gods of Power portrait landed: gold impact hit + the POWER clip, at most once per 1.2 s
+//   portraitLand()            the Gods of Power portrait landed: gold impact hit (no voice: Dez found the POWER clip annoying), at most once per 1.2 s
 //   ambientStart() / ambientStop()  very quiet low drone while the page is open (about -24 dBFS), stops when muted
 //   unlocked()                true when the audio engine exists and is not muted
 // Each cue returns nothing and never throws. When the audio engine is not unlocked yet, cues are skipped.
@@ -276,7 +276,6 @@ export const portraitLand = safe(() => {
     shimmer.node.connect(hp); hp.connect(g); g.connect(e.output);
     startVoice(shimmer);
   }
-  voice('power');
 });
 
 // ---- anticipation riser ---------------------------------------------------------------------------
