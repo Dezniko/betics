@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
 import { TermsPage } from './Terms.jsx';
@@ -24,4 +24,9 @@ rememberFirstTouch();
 // increments and duplicate sound timers. Not needed for a local dev build.
 const terms = /^\/terms\/?$/.test(window.location.pathname);
 const how = /^\/how-it-works\/?$/.test(window.location.pathname);
-ReactDOM.createRoot(document.getElementById('root')).render(terms ? <TermsPage /> : how ? <HowItWorksPage /> : <App />);
+const slots = /^\/slots\/?$/.test(window.location.pathname);
+// The slot game ships as its own chunk, so the roulette page downloads nothing extra.
+const SlotsApp = lazy(() => import('./slots/SlotsApp.jsx'));
+ReactDOM.createRoot(document.getElementById('root')).render(
+  terms ? <TermsPage /> : how ? <HowItWorksPage /> : slots ? <Suspense fallback={null}><SlotsApp /></Suspense> : <App />
+);
