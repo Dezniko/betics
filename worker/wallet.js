@@ -112,6 +112,18 @@ export async function createWalletSession(db, address, now = Date.now()) {
     .bind(await sha256(token), address, address, sqlTime(now + SESSION_DAYS * 864e5)).run();
   return token;
 }
+// One browser at a time: a fresh sign in closes every other session of this wallet.
+export async function revokeOtherWalletSessions(db, address, keepToken) {
+  await db.prepare("UPDATE wallet_sessions SET revoked_at = datetime('now') WHERE player_id = ? AND revoked_at IS NULL AND token_hash != ?")
+    .bind(address, await sha256(keepToken)).run();
+}
+// True when this token was closed by a later sign in elsewhere (another session of the same wallet is live).
+export async function sessionSignedOutElsewhere(db, token) {
+  if (!token) return false;
+  const row = await db.prepare(`SELECT s.player_id FROM wallet_sessions s WHERE s.token_hash = ? AND s.revoked_at IS NOT NULL
+    AND EXISTS (SELECT 1 FROM wallet_sessions o WHERE o.player_id = s.player_id AND o.revoked_at IS NULL AND o.created_at >= s.created_at)`).bind(await sha256(token)).first();
+  return !!row;
+}
 export function walletCookie(token) {
   return token ? `${WALLET_COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}`
     : `${WALLET_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;

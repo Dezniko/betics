@@ -236,13 +236,22 @@ export function shortCreditMessage(expected, actual) {
 // open locks list and is checked in the round history, exactly like a dropped connection.
 export const SPIN_TIMEOUT_MS = 30 * 1000;
 // POST with a timeout. Returns { resp, data }; resp is null when the request failed or timed out.
+// Which tab is playing: the wallet refuses a spin from a second tab or game while a round from the first
+// is still fresh. The id comes from tabPresence (sessionStorage) so a reload keeps it.
+export const PLAY_TAB_HEADER = 'X-Play-Tab';
+export function playTabHeader() {
+  try {
+    const id = globalThis.sessionStorage?.getItem?.('betics:tab-id:v1');
+    return id ? { [PLAY_TAB_HEADER]: id } : {};
+  } catch { return {}; }
+}
 export async function postJsonWithTimeout(url, bodyText, { fetchFn = globalThis.fetch, ms = SPIN_TIMEOUT_MS } = {}) {
   const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
   let timer = null;
   const timeout = new Promise((resolve) => { timer = setTimeout(() => { try { ctrl?.abort(); } catch { /* ignore */ } resolve('timeout'); }, ms); });
   try {
     const work = (async () => {
-      const resp = await fetchFn(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: bodyText, ...(ctrl ? { signal: ctrl.signal } : {}) });
+      const resp = await fetchFn(url, { method: 'POST', headers: { 'content-type': 'application/json', ...playTabHeader() }, body: bodyText, ...(ctrl ? { signal: ctrl.signal } : {}) });
       let data = null;
       try { data = await resp.json(); } catch { data = null; }
       return { resp, data };

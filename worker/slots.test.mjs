@@ -206,7 +206,8 @@ test('replays, reused entropy, stale locks and bad stakes', async () => {
     assert.equal((await p.spin(cookie, 2001)).status, 400);
     assert.equal((await p.spin(cookie, 100)).status, 400);
     assert.equal((await p.spin(cookie, 2000, 'demo', { mathId: 'other' })).status, 409);
-    // Roulette still spins on the same session.
+    // Roulette still spins on the same session (once the one-game window has passed).
+    const realNow = obj.now; obj.now = () => realNow.call(obj) + 10_000;
     const c3 = (await p.call('/api/fairness/commitment', { cookie })).data;
     const rl = await p.call('/api/games/roulette/spin', { cookie, body: { bets: [{ type: 'red', amountCents: 100 }], requestId: randomUUID(), expectedCommitment: c3, clientEntropy: randomBytes(32).toString('hex') } });
     assert.equal(rl.status, 200, JSON.stringify(rl.data));
@@ -288,4 +289,55 @@ test('a round that reaches the cap pays exactly the cap', () => {
   const r = playRound({ stake: 2000, uint32At: makeUint32At('s', 'c', 0), math: m });
   assert.equal(r.totalPayoutUnits, maxPayoutUnits(2000, m));
   assert.equal(r.capped, true);
+});
+
+test('one browser at a time: a new wallet sign in closes the other session, which is told why', async () => {
+  const p = platform();
+  try {
+    const a = await p.login();
+    assert.equal((await p.call('/api/wallet/me', { cookie: a.cookie })).status, 200);
+    const b = await p.login(a.account); // same wallet, another browser
+    assert.equal((await p.call('/api/wallet/me', { cookie: b.cookie })).status, 200, 'the new browser is in');
+    const old = await p.call('/api/wallet/me', { cookie: a.cookie });
+    assert.equal(old.status, 401);
+    assert.equal(old.data.code, 'signed_in_elsewhere');
+    assert.match(old.data.error, /another browser or device/);
+    // A plain logout is not "elsewhere".
+    await p.call('/api/wallet/logout', { cookie: b.cookie, body: {} });
+    const out = await p.call('/api/wallet/me', { cookie: b.cookie });
+    assert.equal(out.status, 401); assert.equal(out.data.code, undefined);
+  } finally { p.restore(); }
+});
+
+test('one game and one tab at a time: a spin from another tab or game within a few seconds is refused, nothing used', async () => {
+  const p = platform();
+  try {
+    const cookie = await p.guest();
+    const spinWith = async (path, body, tab) => p.call(path, { cookie, body, headers: tab ? { 'X-Play-Tab': tab } : {} });
+    const c1 = (await p.call('/api/fairness/commitment', { cookie })).data;
+    const r1 = await spinWith('/api/games/godsofpower/spin', { stake: 2000, requestId: randomUUID(), expectedCommitment: c1, clientEntropy: randomBytes(32).toString('hex') }, 'tab-A');
+    assert.equal(r1.status, 200, JSON.stringify(r1.data));
+    // Another tab, same game, straight away: refused.
+    const c2 = (await p.call('/api/fairness/commitment', { cookie })).data;
+    const e2 = randomBytes(32).toString('hex');
+    const r2 = await spinWith('/api/games/godsofpower/spin', { stake: 2000, requestId: randomUUID(), expectedCommitment: c2, clientEntropy: e2 }, 'tab-B');
+    assert.equal(r2.status, 409); assert.equal(r2.data.code, 'other_tab'); assert.match(r2.data.error, /another tab or game/);
+    // Nothing was consumed: the same lock and entropy still work from the first tab.
+    const r3 = await spinWith('/api/games/godsofpower/spin', { stake: 2000, requestId: randomUUID(), expectedCommitment: c2, clientEntropy: e2 }, 'tab-A');
+    assert.equal(r3.status, 200, JSON.stringify(r3.data));
+    // Roulette from the same tab while the slot round is fresh: refused too (one game at a time).
+    const c4 = (await p.call('/api/fairness/commitment', { cookie })).data;
+    const r4 = await spinWith('/api/games/roulette/spin', { bets: [{ type: 'red', amountCents: 100 }], requestId: randomUUID(), expectedCommitment: c4, clientEntropy: randomBytes(32).toString('hex') }, 'tab-A');
+    assert.equal(r4.status, 409); assert.equal(r4.data.code, 'other_tab');
+    // After the window the other tab may play.
+    const obj = p.objects.values().next().value;
+    const realNow = obj.now; obj.now = () => realNow.call(obj) + 10_000;
+    const c5 = (await p.call('/api/fairness/commitment', { cookie })).data;
+    const r5 = await spinWith('/api/games/roulette/spin', { bets: [{ type: 'red', amountCents: 100 }], requestId: randomUUID(), expectedCommitment: c5, clientEntropy: randomBytes(32).toString('hex') }, 'tab-B');
+    assert.equal(r5.status, 200, JSON.stringify(r5.data));
+    obj.now = realNow;
+    // Replays of an answered request are never refused by the guard.
+    const again = await spinWith('/api/games/godsofpower/spin', { stake: 2000, requestId: r1.data.requestId, expectedCommitment: c1, clientEntropy: r1.data.fairness.clientEntropy }, 'tab-Z');
+    assert.equal(again.status, 200); assert.equal(again.data.roundId, r1.data.roundId);
+  } finally { p.restore(); }
 });

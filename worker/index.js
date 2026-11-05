@@ -15,7 +15,7 @@ import { isTronAddress, paymentSettings, providerReady, createProviderPayment, v
 import { firstTouch, resolvePlayer, createGuestPlayer, touchPlayer, requestMeta, recordEvent, loadGameConfig, publicConfig, triggerMessages, inbox, markInbox } from './platform.js';
 import {
   WalletError, rateLimit, issueNonce, verifySiwe, contractVerifier, upsertWalletPlayer, createWalletSession, walletCookie, walletToken,
-  resolveWalletPlayer, revokeWalletSession, profile, saveEmail, readFloat, freeFloatFrom, liveFloat, liveFloatCached, publicReserve, reserveSpinExposure, releaseSpinExposure, HOLD_KEEP_MS, checkDepositTx, chainTick, requestWithdrawal, refreshHoldings, withdrawalFee,
+  resolveWalletPlayer, revokeWalletSession, revokeOtherWalletSessions, sessionSignedOutElsewhere, profile, saveEmail, readFloat, freeFloatFrom, liveFloat, liveFloatCached, publicReserve, reserveSpinExposure, releaseSpinExposure, HOLD_KEEP_MS, checkDepositTx, chainTick, requestWithdrawal, refreshHoldings, withdrawalFee,
 } from './wallet.js';
 import { ticsSettings, rpcClient, rpcUrl, formatTics } from './tics.js';
 import { pageFor, withPageHead, NOT_FOUND_HTML } from './seo.js';
@@ -39,6 +39,9 @@ const CONTEXT_HEADER = 'X-Platform-Context';
 const INTERNAL_HEADER = 'X-Internal-Secret';
 // Not exported: the Workers runtime only accepts handlers and classes as named exports of the entry module.
 const WITHDRAW_WAIT_MESSAGE = 'Your latest top up is still being confirmed on Ethereum. You can withdraw about 15 minutes after it arrived.';
+const SIGNED_IN_ELSEWHERE_MESSAGE = 'You connected this wallet in another browser or device. Connect again to play here.';
+const OTHER_TAB_MESSAGE = 'You are playing in another tab or game. Finish that round first.';
+const OTHER_TAB_WINDOW_MS = 8000;
 const STATUS_MESSAGES = {
   frozen: 'Your account is paused. Please contact support.',
   banned: 'This account has been closed.',
@@ -274,6 +277,7 @@ async function walletRoutes(request, env, ctx, url, meta, text, walletPlayer) {
     const address = await verifySiwe(db, env, body, { host: url.host, chainId: settings.chainId, verifyContract: contractVerifier(env, settings.chainId) });
     const player = await upsertWalletPlayer(db, address, meta, firstTouch(body));
     const token = await createWalletSession(db, address);
+    await revokeOtherWalletSessions(db, address, token); // one browser at a time
     await recordEvent(db, 'wallet_connect', { player, meta, gameId: 'roulette' }).catch(() => {});
     ctx?.waitUntil?.(refreshHoldings(env, player).catch((e) => console.error('holdings refresh failed', e)));
     const response = json({ ok: true, profile: await profile(db, player, settings) });
@@ -286,7 +290,12 @@ async function walletRoutes(request, env, ctx, url, meta, text, walletPlayer) {
     response.headers.append('Set-Cookie', walletCookie(null));
     return response;
   }
-  if (!walletPlayer) fail(401, 'Connect your wallet first.');
+  if (!walletPlayer) {
+    if (path === '/api/wallet/me' && method === 'GET' && await sessionSignedOutElsewhere(db, walletToken(request))) {
+      const e = new ApiError(401, SIGNED_IN_ELSEWHERE_MESSAGE); e.code = 'signed_in_elsewhere'; throw e;
+    }
+    fail(401, 'Connect your wallet first.');
+  }
   if (path === '/api/wallet/me' && method === 'GET') return json(await profile(db, walletPlayer, settings));
   if (walletPlayer.status !== 'active') fail(403, STATUS_MESSAGES[walletPlayer.status] || 'account unavailable');
   if (path === '/api/wallet/profile' && method === 'POST') { await rateLimit(db, 'profile', meta.ipHash); return json(await saveEmail(db, walletPlayer, parseBody(text))); }
@@ -471,7 +480,8 @@ export default {
       const ticsCfg = await ticsSettings(env.DB);
       const gameConfig = await loadGameConfig(env.DB, spinGame);
       if (isSpin && !gameConfig) fail(404, 'game not found');
-      const context = { playerId: player.id, country: meta.country, device: meta.device, walletPlayer: !!walletPlayer,
+      const playTab = (request.headers.get('X-Play-Tab') || '').slice(0, 64) || null;
+      const context = { playerId: player.id, country: meta.country, device: meta.device, walletPlayer: !!walletPlayer, playTab, game: spinGame,
         realEnabled: !!ticsCfg.realEnabled && !!ticsCfg.casinoWallet, demoStartUnits: ticsCfg.demoStartUnits, minStakeCents: gameConfig ? gameConfig.minStakeCents : 1 };
       if (isSpin) {
         context.config = gameConfig;
@@ -950,6 +960,19 @@ export class DemoCasino {
       return { retired: { serverSeed: current.server_seed, serverSeedHash: current.server_seed_hash }, commitment: publicCommitment(this.commitment()) };
     });
   }
+  // One game and one tab at a time per player (Dez's rule). A spin from another tab or game while a
+  // round from the first is less than a few seconds old is refused before anything is used. Replays of a
+  // request already answered never reach this check (idempotency comes first).
+  checkOnePlay(context) {
+    const now = this.now();
+    const row = this.one("SELECT value FROM meta WHERE key = 'active_play'");
+    const active = row ? JSON.parse(row.value) : null;
+    const tab = context.playTab || 'none', game = context.game || 'roulette';
+    if (active && now - active.at < OTHER_TAB_WINDOW_MS && (active.tab !== tab || active.game !== game)) {
+      const e = new ApiError(409, OTHER_TAB_MESSAGE); e.code = 'other_tab'; throw e;
+    }
+    this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('active_play', ?)", JSON.stringify({ tab, game, at: now }));
+  }
   spin(request, body, context = {}) {
     const config = context.config || null;
     const math = config ? mathOption(config.mathId) : STANDARD;
@@ -965,6 +988,7 @@ export class DemoCasino {
         }
       }
       if (context.replayOnly) fail(503, 'Several big bets are being played at this moment. Please try again in a few seconds.');
+      this.checkOnePlay(context);
       const holdId = typeof context.holdId === 'string' && context.holdId.length <= 200 ? context.holdId : null;
       if (holdId && this.one("SELECT 1 AS ok FROM spin_hold_marks WHERE hold_id = ? AND state = 'void'", holdId)) fail(409, 'This spin took too long to reach the table. Your bet was not taken. Please try again.');
       // The browser says which payout table it agreed to. If it changed since, refuse before anything is
@@ -1064,6 +1088,7 @@ export class DemoCasino {
         }
       }
       if (context.replayOnly) fail(503, 'Several big bets are being played at this moment. Please try again in a few seconds.');
+      this.checkOnePlay(context);
       const holdId = typeof context.holdId === 'string' && context.holdId.length <= 200 ? context.holdId : null;
       if (holdId && this.one("SELECT 1 AS ok FROM spin_hold_marks WHERE hold_id = ? AND state = 'void'", holdId)) fail(409, 'This spin took too long to reach the table. Your bet was not taken. Please try again.');
       if (body.mathId !== undefined && body.mathId !== math.id) {
