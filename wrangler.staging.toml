@@ -1,0 +1,43 @@
+# Staging copy of the game Worker: own Worker, own database, own wallets, demo play only.
+# Deploy with: npx wrangler deploy --config wrangler.staging.toml   (never from main; only from the next branch)
+name = "betics-staging"
+main = "worker/index.js"
+account_id = "046a96b420dcb9935276d06833941737"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+preview_urls = false
+routes = [
+  { pattern = "staging.betics.io", custom_domain = true }
+]
+
+[assets]
+directory = "./frontend/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/*"]
+
+[durable_objects]
+bindings = [{ name = "CASINO", class_name = "DemoCasino" }]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DemoCasino"]
+
+[triggers]
+crons = ["* * * * *"]
+
+[observability]
+enabled = true
+head_sampling_rate = 0.1
+
+[vars]
+STAGING = "true"
+PUBLIC_HOST = "staging.betics.io"
+NOINDEX_ALL = "true"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "betics-staging-db"
+database_id = "103c5613-0ea3-429c-a023-66b675a4533f"
+migrations_dir = "migrations"
