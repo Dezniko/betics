@@ -11,7 +11,7 @@ const group = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 const fmtTics = (units, decimals = 2) => { const abs = Math.abs(Math.round(units)); const whole = Math.floor(abs / 100), frac = String(abs % 100).padStart(2, '0'); return `${units < 0 ? '-' : ''}${group(whole)}${decimals ? `.${frac}` : ''} $TICS`; };
 const fmtShort = (units) => (Math.round(units) % 100 === 0 ? fmtTics(units, 0) : fmtTics(units));
 
-async function open(w, h) {
+async function open(w, h, url = `${APP_URL}/slots`) {
   const page = await (await fetch(`${CDP_URL}/json/new?about:blank`, { method: 'PUT' })).json();
   const ws = new WebSocket(page.webSocketDebuggerUrl); await new Promise((r) => (ws.onopen = r));
   let id = 0; const pending = new Map(), errors = [], responses = [];
@@ -30,7 +30,7 @@ async function open(w, h) {
   await send('Emulation.setTouchEmulationEnabled', { enabled: w < 1100, maxTouchPoints: 5 });
   // Page.enable must come before this, or the pre-seed never runs and the 18+ gate blocks every step.
   await send('Page.addScriptToEvaluateOnNewDocument', { source: "localStorage.setItem('betics:adult:v1','1');" });
-  await send('Page.navigate', { url: `${APP_URL}/slots` });
+  await send('Page.navigate', { url });
   const ready = async () => {
     for (let i = 0; i < 200; i++) {
       await sleep(100);
@@ -68,19 +68,40 @@ async function layoutChecks(x, w, h, label) {
   if (m.phase === 'idle') {
     assert.equal(m.tiles, 15, `${label}: 5 x 3 symbols visible`);
     assert.ok(m.tile[0] >= 36 && m.tile[1] >= 36, `${label}: symbols too small to read (${m.tile})`);
+    // No symbol has a plaque or a border: everything floats on the dark reel.
+    const bordered = await x.ev(`[...document.querySelectorAll('.slot-tile .slot-sym')].filter(e=>{const s=getComputedStyle(e);return ['Top','Right','Bottom','Left'].some(k=>s['border'+k+'Style']!=='none'&&parseFloat(s['border'+k+'Width'])>0)}).map(e=>e.className.baseVal||e.className)`);
+    assert.deepEqual(bordered, [], `${label}: symbols with a CSS border`);
   }
   return m;
 }
 
+// The idle shimmer, dust and glow must leave the main thread free: count animation frames over 2 s. Headless
+// Chrome may tick rAF slower than 60 Hz on its own, so a blank page measured in the same session sets the baseline.
+const countFrames = (x) => x.ev(`new Promise(r=>{let n=0;const end=performance.now()+2000;const step=t=>{n++;if(t<end)requestAnimationFrame(step);else r(n)};requestAnimationFrame(step)})`);
+async function responsiveness(x, label, baseline) {
+  await x.send('Page.bringToFront');
+  const frames = await countFrames(x);
+  const need = Math.min(90, Math.round(baseline * 0.85));
+  assert.ok(frames >= need, `${label}: only ${frames} animation frames in 2 s while idle (blank page: ${baseline})`);
+  return frames;
+}
+
 (async () => {
-  const cases = [[390, 844], [844, 390], [1280, 800]];
+  const cases = [[390, 844], [844, 390], [360, 800], [1280, 800]];
   const report = [];
+  // rAF baseline of this Chrome on an empty page (same session, same emulation).
+  const blank = await open(390, 844, 'about:blank');
+  await blank.send('Page.bringToFront');
+  const baseline = await countFrames(blank);
+  await blank.close();
+  console.log('blank page frames in 2 s:', baseline);
   for (const [w, h] of cases) {
     const label = `${w}x${h}`;
     const x = await open(w, h);
     assert.ok(await x.ready(), `${label}: page not ready (Spin enabled with a lock)`);
     await x.ev('document.fonts.ready.then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))');
     const layout = await layoutChecks(x, w, h, label);
+    const frames = await responsiveness(x, label, baseline);
     const shots = [await x.screenshot(`${label}-idle`)];
     const balanceBefore = await x.ev(`document.querySelector('[data-testid="header-balance"]').textContent`);
     const stake = await x.ev(`Number(document.querySelector('[data-testid="slot-bet-value"]').dataset.stake)`);
@@ -133,8 +154,8 @@ async function layoutChecks(x, w, h, label) {
     assert.ok(await x.ev(`!document.querySelector('[data-testid="slot-spin"]').disabled`), `${label}: ready to spin again`);
     const pageErrors = x.errors.filter((e) => !/ResizeObserver loop/.test(e));
     assert.deepEqual(pageErrors, [], `${label}: page errors`);
-    report.push({ viewport: label, balanceBefore, balanceAfter, stake: reply.stake, payout: reply.totalPayoutCents, spins: reply.spins.length, freeSpins: reply.freeSpinsPlayed, tile: layout.tile, screenshots: shots });
-    console.log('PASS', label, JSON.stringify({ stake: reply.stake, payout: reply.totalPayoutCents, spins: reply.spins.length, balanceAfter }));
+    report.push({ viewport: label, balanceBefore, balanceAfter, stake: reply.stake, payout: reply.totalPayoutCents, spins: reply.spins.length, freeSpins: reply.freeSpinsPlayed, tile: layout.tile, idleFrames2s: frames, screenshots: shots });
+    console.log('PASS', label, JSON.stringify({ stake: reply.stake, payout: reply.totalPayoutCents, spins: reply.spins.length, balanceAfter, idleFrames2s: frames }));
     await x.close();
   }
   fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify({ api: APP_URL, at: new Date().toISOString(), cases: report }, null, 2));
