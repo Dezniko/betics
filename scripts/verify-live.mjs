@@ -16,7 +16,7 @@ if (!existsSync(join(DIST, 'index.html'))) {
   console.error('No local build found. Run: npm --prefix frontend ci && npm run build');
   process.exit(2);
 }
-const files = [...readdirSync(join(DIST, 'assets')).filter((f) => /\.(js|css)$/.test(f)).map((f) => `assets/${f}`), 'verify-roulette.mjs'];
+const files = [...readdirSync(join(DIST, 'assets')).filter((f) => /\.(js|css)$/.test(f)).map((f) => `assets/${f}`), 'verify-roulette.mjs', 'verify-slots.mjs'];
 const localIndex = readFileSync(join(DIST, 'index.html'), 'utf8');
 const liveIndex = await (await fetch(`${BASE}/`, { headers: { 'cache-control': 'no-cache' } })).text();
 const entries = [...localIndex.matchAll(/(?:src|href)="\/(assets\/[^"]+\.(?:js|css))"/g)].map((m) => m[1]);
