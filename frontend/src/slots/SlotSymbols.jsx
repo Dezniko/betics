@@ -284,17 +284,28 @@ export const Tether = () => <Coin code="J" />;
 // Qubetics (top regular symbol): the official Qubetics logo (used with permission), soft glow only.
 export const Qubetics = () => <img className="slot-sym slot-sym-D slot-sym-img" src="/slots/qubetics.webp" width="512" height="512" alt={symbolName('D')} draggable="false" />;
 
+// Rendered symbol art: 3D renders on transparent backgrounds (frontend/public/slots), one image per code.
+const Img = ({ code, file }) => <img className={`slot-sym slot-sym-${code} slot-sym-img`} src={`/slots/${file}.webp`} width="512" height="512" alt={symbolName(code)} draggable="false" />;
+export const BitcoinCoin = () => <Img code="A" file="bitcoin" />;
+export const EthereumCoin = () => <Img code="K" file="ethereum" />;
+export const SolanaCoin = () => <Img code="Q" file="solana" />;
+export const TetherCoin = () => <Img code="J" file="tether" />;
+export const RubyImage = () => <Img code="R" file="ruby" />;
+export const VaultDoorImage = () => <Img code="S" file="vault-door" />;
+export const GoldBarImage = () => <Img code="B" file="gold-bar" />;
+export const TreasureChestImage = () => <Img code="C" file="treasure-chest" />;
+
 export const SYMBOL_COMPONENTS = Object.freeze({
   W: GodsOfPower,
-  S: VaultDoor,
+  S: VaultDoorImage,
   D: Qubetics,
-  B: GoldBar,
-  R: Ruby,
-  C: TreasureChest,
-  A: Bitcoin,
-  K: Ethereum,
-  Q: Solana,
-  J: Tether,
+  B: GoldBarImage,
+  R: RubyImage,
+  C: TreasureChestImage,
+  A: BitcoinCoin,
+  K: EthereumCoin,
+  Q: SolanaCoin,
+  J: TetherCoin,
 });
 
 export function SlotSymbol({ code }) {
