@@ -7,7 +7,10 @@ import {
 } from '../backend/src/games/roulette.js';
 import { mathOption, STANDARD } from '../backend/src/games/rouletteMath.js';
 import { maxPayoutCents } from '../backend/src/games/roulette.js';
-import { checkRoundLimits } from './limits.js';
+import { checkRoundLimits, checkSlotLimits, slotLimitMessage } from './limits.js';
+import { playRound, maxPayoutUnits as slotMaxPayout } from '../backend/src/games/slots.js';
+import { SLOT_MATH } from '../backend/src/games/slotsMath.js';
+import { makeUint32At } from '../backend/src/core/slotDraws.js';
 import { isTronAddress, paymentSettings, providerReady, createProviderPayment, verifyIpn, mapProviderStatus } from './payments.js';
 import { firstTouch, resolvePlayer, createGuestPlayer, touchPlayer, requestMeta, recordEvent, loadGameConfig, publicConfig, triggerMessages, inbox, markInbox } from './platform.js';
 import {
@@ -360,6 +363,7 @@ export default {
           const headers = new Headers(asset.headers);
           headers.delete('Content-Length');
           headers.delete('ETag');
+          if (page.noindex) headers.set('X-Robots-Tag', ROBOTS);
           const body = request.method === 'HEAD' ? null : withPageHead(await asset.text(), page);
           return secured(new Response(body, { status: 200, headers }), false);
         }
@@ -441,8 +445,10 @@ export default {
         if (inboxAction[2] !== 'dismiss') await recordEvent(env.DB, inboxAction[2] === 'seen' ? 'message_seen' : 'message_click', { player, meta, extra: { messageId: Number(inboxAction[1]) } }).catch(() => {});
         return secured(json({ ok: true }));
       }
-      if (url.pathname === '/api/games/roulette/config' && request.method === 'GET') {
-        const config = await loadGameConfig(env.DB, 'roulette');
+      const configRoute = url.pathname.match(/^\/api\/games\/(roulette|slots)\/config$/);
+      if (configRoute && request.method === 'GET') {
+        const config = await loadGameConfig(env.DB, configRoute[1]);
+        if (!config) fail(404, 'game not found');
         return secured(json(publicConfig(config)));
       }
       if (url.pathname === '/api/events' && request.method === 'POST') {
@@ -456,11 +462,14 @@ export default {
         return secured(json({ ok: true }));
       }
       if (url.pathname.startsWith('/api/payments')) return secured(json(await playerPayments(request, env, url, player, text)));
-      const isSpin = url.pathname === '/api/games/roulette/spin' && request.method === 'POST';
+      const spinRoute = request.method === 'POST' ? url.pathname.match(/^\/api\/games\/(roulette|slots)\/spin$/) : null;
+      const isSpin = !!spinRoute;
+      const spinGame = spinRoute ? spinRoute[1] : 'roulette';
       let holdId = null;
       if (player.status !== 'active' && !isSession && request.method !== 'GET') fail(403, STATUS_MESSAGES[player.status] || 'account unavailable');
       const ticsCfg = await ticsSettings(env.DB);
-      const gameConfig = await loadGameConfig(env.DB, 'roulette');
+      const gameConfig = await loadGameConfig(env.DB, spinGame);
+      if (isSpin && !gameConfig) fail(404, 'game not found');
       const context = { playerId: player.id, country: meta.country, device: meta.device, walletPlayer: !!walletPlayer,
         realEnabled: !!ticsCfg.realEnabled && !!ticsCfg.casinoWallet, demoStartUnits: ticsCfg.demoStartUnits, minStakeCents: gameConfig ? gameConfig.minStakeCents : 1 };
       if (isSpin) {
@@ -476,11 +485,19 @@ export default {
         // Real spin: book its worst net win atomically before it runs, so any number of players
         // spinning at once can never be owed more than the wallet holds.
         if (spinBody.mode === 'real' && walletPlayer && live) {
-          let bets = null;
-          try { bets = normalizedBets(spinBody.bets); } catch { bets = null; } // the Durable Object reports the exact error
-          if (bets) {
-            const math = gameConfig ? mathOption(gameConfig.mathId) : STANDARD;
-            const worst = maxPayoutCents(bets, math), stake = bets.reduce((t, b) => t + b.amountCents, 0);
+          let worst = null, stake = 0;
+          if (spinGame === 'slots') {
+            // A slot round's worst case is its cap (the round stops there), so the booking is cap minus stake.
+            if (Number.isSafeInteger(spinBody.stake) && spinBody.stake > 0) { stake = spinBody.stake; worst = slotMaxPayout(stake, SLOT_MATH); }
+          } else {
+            let bets = null;
+            try { bets = normalizedBets(spinBody.bets); } catch { bets = null; } // the Durable Object reports the exact error
+            if (bets) {
+              const math = gameConfig ? mathOption(gameConfig.mathId) : STANDARD;
+              worst = maxPayoutCents(bets, math); stake = bets.reduce((t, b) => t + b.amountCents, 0);
+            }
+          }
+          if (worst !== null) {
             if (worst <= live.maxWinUnits) {
               holdId = `${player.id}:${typeof spinBody.requestId === 'string' ? spinBody.requestId.slice(0, 40) : ''}:${crypto.randomUUID()}`;
               const booked = await reserveSpinExposure(env.DB, { id: holdId, playerId: player.id, units: Math.max(0, worst - stake) });
@@ -1030,6 +1047,97 @@ export class DemoCasino {
       return result;
     });
   }
+  // Gods of Power: one request plays the base spin and every free spin as ONE round in one transaction.
+  // Same lock, same entropy rule, same money and booking rules as a roulette spin.
+  spinSlots(request, body, context = {}) {
+    const config = context.config || null;
+    const math = SLOT_MATH;
+    const key = idempotencyKey(request, body);
+    const fingerprint = JSON.stringify(canonicalInput(body));
+    return this.ctx.storage.transactionSync(() => {
+      if (key !== null) {
+        const cached = this.one('SELECT * FROM idempotency WHERE request_key = ?', key);
+        if (cached) {
+          if (cached.fingerprint !== fingerprint) fail(409, 'idempotency key already used for different inputs');
+          return JSON.parse(cached.response_json);
+        }
+      }
+      if (context.replayOnly) fail(503, 'Several big bets are being played at this moment. Please try again in a few seconds.');
+      const holdId = typeof context.holdId === 'string' && context.holdId.length <= 200 ? context.holdId : null;
+      if (holdId && this.one("SELECT 1 AS ok FROM spin_hold_marks WHERE hold_id = ? AND state = 'void'", holdId)) fail(409, 'This spin took too long to reach the table. Your bet was not taken. Please try again.');
+      if (body.mathId !== undefined && body.mathId !== math.id) {
+        const e = new ApiError(409, 'The pay table changed. Please check it and confirm again.'); e.code = 'table_changed'; throw e;
+      }
+      const stake = body.stake;
+      if (!Number.isSafeInteger(stake) || stake <= 0) fail(400, 'stake must be a positive whole number of units');
+      const mode = body.mode === undefined ? 'demo' : body.mode;
+      if (mode !== 'demo' && mode !== 'real') fail(400, 'mode must be demo or real');
+      const real = mode === 'real';
+      const expected = expectedCommitment(body.expectedCommitment);
+      if (typeof body.clientEntropy !== 'string' || !/^[a-f0-9]{64}$/.test(body.clientEntropy)) fail(400, 'clientEntropy must be 64 lowercase hex characters');
+      if (config) {
+        const blocked = checkSlotLimits(stake, config, math);
+        if (blocked) fail(blocked.status, blocked.error);
+      }
+      const worst = slotMaxPayout(stake, math);
+      if (real) {
+        if (!context.walletPlayer) fail(403, 'Connect your wallet to play with real $TICS.');
+        if (!context.realEnabled) fail(503, 'Real play is not open yet.');
+        if (!Number.isSafeInteger(context.freeFloatCents) || context.freeFloatCents <= 0) fail(503, 'Real play is paused while the casino wallet is checked. Please try again shortly.');
+        if (worst > context.freeFloatCents) fail(503, slotLimitMessage(context.freeFloatCents, math));
+      } else if (Number.isSafeInteger(context.maxWinCents) && context.maxWinCents > 0 && worst > context.maxWinCents) {
+        fail(503, slotLimitMessage(context.maxWinCents, math));
+      }
+      if (!real && !this.demoAllowed(config ? config.minStakeCents : 1)) fail(403, 'Demo is not available while you have real funds.');
+      const user = this.user();
+      const current = this.commitment();
+      checkCommitment(expected, current);
+      const startBalance = real ? this.ticsBalance() : user.balance_cents;
+      if (real && !this.ticsReconciled()) fail(409, 'balance check failed');
+      if (startBalance < stake) fail(402, 'insufficient balance');
+      if (this.one('SELECT client_entropy FROM entropy_used WHERE client_entropy = ?', body.clientEntropy)) fail(409, 'clientEntropy already used');
+      this.sql.exec('INSERT INTO entropy_used (client_entropy) VALUES (?)', body.clientEntropy);
+      const effectiveClientSeed = `${current.client_seed}:${body.clientEntropy}`;
+      const round = playRound({ stake, uint32At: makeUint32At(current.server_seed, effectiveClientSeed, current.nonce), math });
+      const payout = round.totalPayoutUnits;
+      const afterDebit = startBalance - stake;
+      const balanceAfter = afterDebit + payout;
+      if (!Number.isSafeInteger(balanceAfter) || balanceAfter < 0) fail(400, 'balance exceeds demo limits');
+      const currency = 'TICS';
+      const writeBalance = (value) => (real
+        ? this.sql.exec('UPDATE real_tics SET balance_cents = ? WHERE id = 1', value)
+        : this.sql.exec('UPDATE users SET balance_cents = ? WHERE id = 1', value));
+      if (real) this.sql.exec('INSERT OR IGNORE INTO real_tics (id, balance_cents) VALUES (1, 0)');
+      writeBalance(afterDebit);
+      const outcome = { game: 'slots', spins: round.spins.map((s) => ({ free: s.free, stops: s.stops, lineWins: s.lineWins, scatterCount: s.scatterCount, scatterPay: s.scatterPay, multiplier: s.multiplier, winUnits: s.winUnits, freeSpinsAdded: s.freeSpinsAdded })),
+        freeSpinsAwarded: round.freeSpinsAwarded, freeSpinsPlayed: round.freeSpinsPlayed, capped: round.capped };
+      const row = this.one(`INSERT INTO rounds
+        (user_id, game, stake_cents, bet_json, server_seed, server_seed_hash, client_seed, nonce, receipt_json, game_id, math_id, config_version, currency, real_money, country, device)
+        VALUES (1, 'slots', ?, ?, ?, ?, ?, ?, ?, 'slots', ?, ?, ?, ?, ?, ?) RETURNING id`,
+        stake, JSON.stringify({ stake, lines: math.lineCount }), current.server_seed, current.server_seed_hash, effectiveClientSeed, current.nonce,
+        JSON.stringify({ requestId: key, expectedCommitment: expected, clientEntropy: body.clientEntropy, mode }),
+        math.id, config ? config.configVersion : 0, currency, real ? 1 : 0, context.country || null, context.device || null);
+      const roundId = row.id;
+      this.sql.exec("INSERT INTO ledger (user_id, type, amount_cents, balance_after_cents, round_id, real_money, currency) VALUES (1, 'bet_reserve', ?, ?, ?, ?, ?)", -stake, afterDebit, roundId, real ? 1 : 0, currency);
+      this.sql.exec("UPDATE rounds SET status = 'settled', outcome_json = ?, payout_cents = ?, revealed_at = datetime('now') WHERE id = ?", JSON.stringify(outcome), payout, roundId);
+      writeBalance(balanceAfter);
+      this.sql.exec('INSERT INTO ledger (user_id, type, amount_cents, balance_after_cents, round_id, real_money, currency) VALUES (1, ?, ?, ?, ?, ?, ?)', payout > 0 ? 'bet_settle_win' : 'bet_settle_loss', payout, balanceAfter, roundId, real ? 1 : 0, currency);
+      const nextSeed = generateServerSeed();
+      this.sql.exec('UPDATE fairness_commitments SET server_seed = ?, server_seed_hash = ?, nonce = 0 WHERE user_id = 1', nextSeed, hashServerSeed(nextSeed));
+      const result = {
+        requestId: key, roundId, game: 'slots', stake, spins: round.spins, freeSpinsAwarded: round.freeSpinsAwarded, freeSpinsPlayed: round.freeSpinsPlayed, capped: round.capped,
+        totalStakeCents: stake, totalPayoutCents: payout, mathId: math.id, mode, balanceBeforeCents: startBalance, balanceAfterCents: balanceAfter,
+        fairness: {
+          serverSeed: current.server_seed, serverSeedHash: current.server_seed_hash,
+          clientSeed: effectiveClientSeed, clientSeedBase: current.client_seed, clientEntropy: body.clientEntropy, nonce: current.nonce,
+          nextCommitment: publicCommitment(this.commitment()),
+        },
+      };
+      if (holdId) this.sql.exec("INSERT OR IGNORE INTO spin_hold_marks (hold_id, state) VALUES (?, 'pending')", holdId);
+      if (key !== null) this.sql.exec('INSERT INTO idempotency (request_key, fingerprint, response_json) VALUES (?, ?, ?)', key, fingerprint, JSON.stringify(result));
+      return result;
+    });
+  }
   async fetch(request) {
     try {
       checkOrigin(request);
@@ -1083,7 +1191,8 @@ export class DemoCasino {
       if (method === 'POST' && pathname === '/api/demo/reset-balance') { const result = this.resetDemoBalance(body, demoStart, minStake); await this.flush(); return json(result); }
       if (method === 'POST' && pathname === '/api/fairness/client-seed') return json(this.setSeed(body));
       if (method === 'POST' && pathname === '/api/fairness/rotate') return json(this.rotateLock(body));
-      if (method === 'POST' && pathname === '/api/games/roulette/spin') {
+      if (method === 'POST' && (pathname === '/api/games/roulette/spin' || pathname === '/api/games/slots/spin')) {
+        const run = pathname === '/api/games/slots/spin' ? (req, b, c) => this.spinSlots(req, b, c) : (req, b, c) => this.spin(req, b, c);
         // X-Hold tells the Worker whether the spin booking can be released (prelaunch audit P2). 'release' only
         // when this wallet knows the booking is no longer needed: the spin was refused before anything was
         // committed, or its balance is confirmed in the central copy. Everything else keeps it counted.
@@ -1093,7 +1202,7 @@ export class DemoCasino {
           // A replay of a spin already made (lost reply) is always answered; new spins are rate limited.
           const replay = typeof body?.requestId === 'string' && this.one('SELECT 1 AS ok FROM idempotency WHERE request_key = ?', body.requestId);
           if (!replay && !this.takeSpinToken()) return release(json({ error: 'Slow down a little. Your bet was not taken.' }, 429));
-          const result = this.spin(request, body, context);
+          const result = run(request, body, context);
           try { this.pruneOld(); } catch (error) { console.error('prune failed', error); }
           const flushed = await this.flush(); // never throws: false means the copy is still pending
           const r = json(result);

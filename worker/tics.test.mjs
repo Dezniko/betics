@@ -12,7 +12,7 @@ import { deriveOutcome } from '../backend/src/core/fairness.js';
 import { weiToUnits, unitsToWei, formatTics, normAddress, OFFICIAL_TICS, TRANSFER_TOPIC, decodeTransfers, rpcClient } from './tics.js';
 import { owedUnits, chainTick, parseHoldings, refreshHoldings, HOLDINGS_DAILY_CAP, sweepSpinHolds, liveFloat, reserveSpinExposure, HOLD_ALERT_AFTER_MS, finalizeDeposits, FINAL_MISS_CONFIRM_MS } from './wallet.js';
 
-const MIGRATIONS = ['0001_platform.sql', '0002_payments.sql', '0003_tics.sql', '0004_spin_holds.sql', '0005_audit_fixes.sql', '0006_admin.sql', '0007_r3.sql', '0008_reaudit.sql'].map((f) => new URL(`../migrations/${f}`, import.meta.url).pathname);
+const MIGRATIONS = ['0001_platform.sql', '0002_payments.sql', '0003_tics.sql', '0004_spin_holds.sql', '0005_audit_fixes.sql', '0006_admin.sql', '0007_r3.sql', '0008_reaudit.sql', '0009_slots.sql'].map((f) => new URL(`../migrations/${f}`, import.meta.url).pathname);
 const HOST = 'betics.example';
 const CASINO = '0xc0ffee0000000000000000000000000000000001';
 const FAKE_TICS = '0xad34bbc446785fc7f2995578c7273f706ebea177';

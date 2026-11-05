@@ -17,10 +17,20 @@ export const PAGES = {
   },
 };
 
+// Pages served by the app but kept out of search (not in the sitemap, noindex): the slot while it is in testing.
+export const HIDDEN_PAGES = {
+  '/slots': {
+    title: 'Gods of Power · qu-BETICS',
+    description: 'Gods of Power, a five reel slot played with $TICS on qu-BETICS.',
+  },
+};
+
 // '/terms/' and '/terms' are the same page; anything else is not a page.
 export function pageFor(pathname) {
   const path = pathname.length > 1 ? pathname.replace(/\/$/, '') : pathname;
-  return Object.hasOwn(PAGES, path) ? { path, ...PAGES[path] } : null;
+  if (Object.hasOwn(PAGES, path)) return { path, ...PAGES[path] };
+  if (Object.hasOwn(HIDDEN_PAGES, path)) return { path, ...HIDDEN_PAGES[path], noindex: true };
+  return null;
 }
 
 const escapeHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -46,7 +56,8 @@ export function headTags({ path, title, description }) {
 
 // Replaces the <title> in index.html with the page's title, description, canonical and share tags.
 export function withPageHead(html, page) {
-  return html.replace(/<title>[^<]*<\/title>/, headTags(page));
+  const tags = page.noindex ? `${headTags(page)}\n    <meta name="robots" content="noindex, nofollow" />` : headTags(page);
+  return html.replace(/<title>[^<]*<\/title>/, tags);
 }
 
 export const NOT_FOUND_HTML = `<!doctype html>

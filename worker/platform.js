@@ -2,6 +2,7 @@
 // Durable Object stays the authority for money; this module resolves who the
 // player is, what the game's live admin config is, and records analytics.
 import { mathOption } from '../backend/src/games/rouletteMath.js';
+import { SLOT_MATH } from '../backend/src/games/slotsMath.js';
 
 const hex = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
 export const sha256 = async text => hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
@@ -100,10 +101,15 @@ export function clearConfigCache() { cache.clear(); }
 
 // What the player's browser may see about a game's live config.
 export function publicConfig(config) {
+  const head = { gameId: config.gameId, enabled: config.enabled, maintenanceMessage: config.enabled ? null : config.maintenanceMessage,
+    minStakeCents: config.minStakeCents, maxStakeCents: config.maxStakeCents, maxWinCents: config.maxWinCents, currency: config.currency };
+  if (config.gameId === 'slots') {
+    const m = SLOT_MATH;
+    return { ...head, math: { id: m.id, label: m.label, rtp: m.rtp, reels: m.reels, rows: m.rows, lineCount: m.lineCount, betLevels: m.betLevels,
+      symbols: m.symbols, lines: m.lines, strips: m.strips, pays: m.pays, scatterPays: m.scatterPays, freeSpins: m.freeSpins, capMultiplier: m.capMultiplier } };
+  }
   const math = mathOption(config.mathId);
-  return { gameId: config.gameId, enabled: config.enabled, maintenanceMessage: config.enabled ? null : config.maintenanceMessage,
-    minStakeCents: config.minStakeCents, maxStakeCents: config.maxStakeCents, maxWinCents: config.maxWinCents,
-    currency: config.currency, math: { id: math.id, label: math.label, multipliers: math.multipliers } };
+  return { ...head, math: { id: math.id, label: math.label, multipliers: math.multipliers } };
 }
 
 // Messages from the admin panel. Audience rules mirror casino-admin's

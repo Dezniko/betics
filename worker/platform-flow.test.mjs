@@ -6,7 +6,7 @@ import worker, { DemoCasino } from './index.js';
 import { clearConfigCache, firstTouch } from './platform.js';
 import { createD1 } from '../test-support/d1shim.mjs';
 
-const MIGRATIONS = ['0001_platform.sql', '0002_payments.sql', '0003_tics.sql', '0004_spin_holds.sql', '0005_audit_fixes.sql', '0006_admin.sql', '0007_r3.sql', '0008_reaudit.sql'].map((f) => new URL(`../migrations/${f}`, import.meta.url).pathname);
+const MIGRATIONS = ['0001_platform.sql', '0002_payments.sql', '0003_tics.sql', '0004_spin_holds.sql', '0005_audit_fixes.sql', '0006_admin.sql', '0007_r3.sql', '0008_reaudit.sql', '0009_slots.sql'].map((f) => new URL(`../migrations/${f}`, import.meta.url).pathname);
 
 function doStorage() {
   const db = new DatabaseSync(':memory:');
