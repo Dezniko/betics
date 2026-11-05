@@ -1427,7 +1427,7 @@ export default function App() {
         <GameToast onDismiss={(kind) => { if (kind === 'error') setError(null); if (kind === 'info') setNotice(null); if (kind === 'elsewhere') setElsewhere(null); }} toasts={[
           gameClosed && { kind: 'closed', className: 'game-notice', testid: 'game-closed', title: toastTitle('closed'), text: gameConfig.maintenanceMessage || 'This game is having a short break. Please check back soon.' },
           !gameClosed && tableInvalid && { kind: 'closed', className: 'game-error', testid: 'payout-table-invalid', title: 'Betting paused', text: 'The payout table from the server does not look right, so betting is paused. Please reload the page or contact support.' },
-          elsewhere && !error && { kind: 'elsewhere', className: 'game-error', title: 'Wallet', text: elsewhere, dismissible: true, testid: 'signed-in-elsewhere', action: { label: 'Connect again', testid: 'connect-again', onClick: () => { setElsewhere(null); requestConnect(); } } },
+          elsewhere && !error && { kind: 'elsewhere', className: 'game-error game-toast-error', title: 'Wallet', text: elsewhere, dismissible: true, testid: 'signed-in-elsewhere', action: { label: 'Connect again', testid: 'connect-again', onClick: () => { setElsewhere(null); requestConnect(); } } },
           notice && !error && { kind: 'info', className: 'game-notice', title: toastTitle('info', notice), text: notice, dismissible: true },
           error && { kind: 'error', className: 'game-error', title: toastTitle('error', error, verificationBlocked), text: error, dismissible: !verificationBlocked },
         ].filter(Boolean)} />

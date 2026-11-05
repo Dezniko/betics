@@ -7,6 +7,7 @@ const ICONS = {
   error: <path d="M12 7v6M12 16.5h.01" />,
   closed: <path d="M9 9v6M15 9v6" />,
 };
+ICONS.elsewhere = ICONS.error; // a closed wallet session reads as an error
 
 export function toastTitle(kind, text, blocked) {
   const t = String(text || '');

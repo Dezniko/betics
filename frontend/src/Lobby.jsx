@@ -89,7 +89,7 @@ export default function Lobby() {
   const balanceText = user && balance != null ? (layout === 'portrait' ? fmtTics(balance, { decimals: Math.round(balance) % 100 === 0 ? 0 : 2 }) : fmtMoney(balance)) : '...';
   const chooseMode = (m) => { const reason = session.chooseMode(m); if (reason) setNotice(reason); else { setError(null); setNotice(null); } };
   const toasts = [
-    session.elsewhere && !error && { kind: 'elsewhere', className: 'game-error', title: 'Wallet', text: session.elsewhere, dismissible: true, testid: 'signed-in-elsewhere', action: { label: 'Connect again', testid: 'connect-again', onClick: () => { session.clearElsewhere(); session.requestConnect(); } } },
+    session.elsewhere && !error && { kind: 'elsewhere', className: 'game-error game-toast-error', title: 'Wallet', text: session.elsewhere, dismissible: true, testid: 'signed-in-elsewhere', action: { label: 'Connect again', testid: 'connect-again', onClick: () => { session.clearElsewhere(); session.requestConnect(); } } },
     notice && !error && { kind: 'info', className: 'game-notice', title: toastTitle('info', notice), text: notice, dismissible: true, testid: 'lobby-notice' },
     error && { kind: 'error', className: 'game-error', title: toastTitle('error', error), text: error, dismissible: true, testid: 'lobby-error' },
   ].filter(Boolean);
