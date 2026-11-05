@@ -43,6 +43,8 @@ export default function SlotPaytable({ stake, mobile, onClose }) {
         <span className="slot-pt-pill" data-testid="paytable-rtp">{copy.payback}</span>
         <span className="slot-pt-pill">{copy.cap}</span>
       </div>
+      <h4>{copy.rulesTitle}</h4>
+      <ol className="slot-pt-rules" data-testid="paytable-rules">{copy.rules.map((r, i) => <li key={i}>{r}</li>)}</ol>
       <h4>{copy.symbolsTitle}</h4>
       <div className="slot-pt-grid" data-testid="paytable-rows">
         <div className="slot-pt-row slot-pt-head"><span /><span>Symbol</span><span>3</span><span>4</span><span>5</span></div>

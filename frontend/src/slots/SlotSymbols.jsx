@@ -7,7 +7,11 @@ const Svg = ({ code, children, defs }) => <svg className={`slot-sym slot-sym-${c
   {children}
 </svg>;
 
-// Golden key (wild): a round bow with a purple gem, a long shaft and two teeth.
+// Gods of Power (wild, the top paying symbol): the owner's cartoon portrait (used with permission),
+// a gold ring with neon glow. Rendered as an image, not SVG.
+export const GodsOfPower = () => <img className="slot-sym slot-sym-W slot-sym-img" src="/slots/gods-of-power.webp" width="512" height="512" alt={symbolName('W')} draggable="false" />;
+
+// Golden key: kept as spare art.
 export const GoldenKey = () => <Svg code="W" defs={<>
   <linearGradient id="gp-gold" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#fff2c2" /><stop offset=".35" stopColor="#f1c860" /><stop offset=".7" stopColor="#b8851d" /><stop offset="1" stopColor="#f7dd8a" /></linearGradient>
   <radialGradient id="gp-purple" cx=".4" cy=".35" r=".7"><stop offset="0" stopColor="#e8b6ff" /><stop offset=".5" stopColor="#a63cff" /><stop offset="1" stopColor="#4a0f80" /></radialGradient>
@@ -104,7 +108,7 @@ export const LetterQ = () => <Letter code="Q" glyph="Q" glow="#22d3ff" />;
 export const LetterJ = () => <Letter code="J" glyph="J" glow="#7c6bff" />;
 
 export const SYMBOL_COMPONENTS = Object.freeze({
-  W: GoldenKey,
+  W: GodsOfPower,
   S: VaultDoor,
   D: Diamond,
   B: GoldBar,
