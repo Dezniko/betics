@@ -12,7 +12,7 @@ import { playRound, maxPayoutUnits as slotMaxPayout } from '../backend/src/games
 import { SLOT_MATH } from '../backend/src/games/slotsMath.js';
 import { makeUint32At } from '../backend/src/core/slotDraws.js';
 import { isTronAddress, paymentSettings, providerReady, createProviderPayment, verifyIpn, mapProviderStatus } from './payments.js';
-import { firstTouch, resolvePlayer, createGuestPlayer, touchPlayer, requestMeta, recordEvent, loadGameConfig, publicConfig, triggerMessages, inbox, markInbox } from './platform.js';
+import { sha256, firstTouch, resolvePlayer, createGuestPlayer, touchPlayer, requestMeta, recordEvent, loadGameConfig, publicConfig, triggerMessages, inbox, markInbox } from './platform.js';
 import {
   WalletError, rateLimit, issueNonce, verifySiwe, contractVerifier, upsertWalletPlayer, createWalletSession, walletCookie, walletToken,
   resolveWalletPlayer, revokeWalletSession, revokeOtherWalletSessions, sessionSignedOutElsewhere, profile, saveEmail, readFloat, freeFloatFrom, liveFloat, liveFloatCached, publicReserve, reserveSpinExposure, releaseSpinExposure, HOLD_KEEP_MS, checkDepositTx, chainTick, requestWithdrawal, refreshHoldings, withdrawalFee,
@@ -79,6 +79,27 @@ const HSTS = 'max-age=31536000; includeSubDomains';
 export function tableLimitMessage(worst, maxWin, math = STANDARD) {
   const straight = Math.floor(maxWin / (math.multipliers?.straight || 36));
   return `The most you can bet on one number right now is ${formatTics(straight)}.`;
+}
+
+// Password page for the staging site. The cookie holds sha256(password + salt); wrong or missing shows the form.
+const GATE_COOKIE = '__Host-staging_gate';
+async function stagingGate(request, env, url) {
+  const want = await sha256(`${env.STAGING_GATE}:gate`);
+  const have = (request.headers.get('Cookie') || '').split(';').map((p) => p.trim()).find((p) => p.startsWith(`${GATE_COOKIE}=`))?.slice(GATE_COOKIE.length + 1);
+  if (have === want) return null;
+  if (request.method === 'POST' && url.pathname === '/staging-gate') {
+    const form = await request.formData().catch(() => null);
+    const given = form ? String(form.get('password') || '') : '';
+    if (given && sameSecret(given, env.STAGING_GATE)) {
+      const back = typeof form.get('back') === 'string' && /^\/[^\s]*$/.test(form.get('back')) ? form.get('back') : '/';
+      return new Response(null, { status: 303, headers: { Location: back, 'Set-Cookie': `${GATE_COOKIE}=${want}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${30 * 86400}` } });
+    }
+  }
+  if (url.pathname.startsWith('/api/')) return json({ error: 'staging gate' }, 401);
+  const html = `<!doctype html><html lang="en"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><meta name="robots" content="noindex" /><title>qu-BETICS staging</title>
+<style>body{margin:0;min-height:100dvh;display:grid;place-items:center;background:#06060a;color:#ede9e1;font-family:system-ui,sans-serif}form{display:grid;gap:12px;width:min(320px,90vw);padding:28px;border-radius:16px;background:#0f0f16;border:1px solid rgba(255,255,255,.08)}h1{margin:0;font-size:14px;letter-spacing:.2em;color:#d6b06a;text-transform:uppercase}input{padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:#06060a;color:#ede9e1;font-size:16px}button{padding:12px;border-radius:10px;border:0;background:linear-gradient(100deg,#a63cff,#5a4bff,#22c7ff);color:#fff;font-weight:700;font-size:15px}</style></head>
+<body><form method="post" action="/staging-gate"><h1>Staging</h1><input type="hidden" name="back" value="${url.pathname.replace(/"/g, '')}" /><input type="password" name="password" placeholder="Password" autofocus autocomplete="current-password" /><button type="submit">Enter</button></form></body></html>`;
+  return new Response(html, { status: 401, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': ROBOTS } });
 }
 // Constant-time comparison for shared secrets.
 function sameSecret(given, expected) {
@@ -343,6 +364,12 @@ export default {
     if (url.hostname === 'betics.io') {
       url.hostname = 'www.betics.io';
       return Response.redirect(url.toString(), 301);
+    }
+    // Staging gate: when STAGING_GATE is set, every request needs the gate cookie (the password's hash).
+    // Live has no STAGING_GATE, so this block never runs there.
+    if (env.STAGING_GATE) {
+      const gate = await stagingGate(request, env, url);
+      if (gate) return gate;
     }
     const api = url.pathname === '/api' || url.pathname.startsWith('/api/');
     try {

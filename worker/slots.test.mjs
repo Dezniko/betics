@@ -342,3 +342,21 @@ test('one game and one tab at a time: a spin from another tab or game within a f
     assert.equal(again.status, 200); assert.equal(again.data.roundId, r1.data.roundId);
   } finally { p.restore(); }
 });
+
+test('staging gate: with STAGING_GATE set every page and API needs the password cookie; live (no var) is untouched', async () => {
+  const p = platform();
+  try {
+    p.env.STAGING_GATE = 'open-sesame';
+    const page = await worker.fetch(new Request(`https://${HOST}/godsofpower`), p.env, { waitUntil() {} });
+    assert.equal(page.status, 401); assert.match(await page.text(), /Staging/);
+    assert.equal((await p.call('/api/session', { body: {} })).status, 401);
+    const bad = await worker.fetch(new Request(`https://${HOST}/staging-gate`, { method: 'POST', body: new URLSearchParams({ password: 'nope', back: '/godsofpower' }) }), p.env, { waitUntil() {} });
+    assert.equal(bad.status, 401);
+    const ok = await worker.fetch(new Request(`https://${HOST}/staging-gate`, { method: 'POST', body: new URLSearchParams({ password: 'open-sesame', back: '/godsofpower' }) }), p.env, { waitUntil() {} });
+    assert.equal(ok.status, 303); assert.equal(ok.headers.get('location'), '/godsofpower');
+    const cookie = ok.headers.get('set-cookie').split(';')[0];
+    assert.equal((await p.call('/api/session', { body: {}, cookie })).status, 200);
+    delete p.env.STAGING_GATE;
+    assert.equal((await p.call('/api/session', { body: {} })).status, 200, 'no gate without the var');
+  } finally { p.restore(); }
+});
