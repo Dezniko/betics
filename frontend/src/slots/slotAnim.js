@@ -11,7 +11,7 @@ export const TIMING = Object.freeze({
   lineMs: 350,            // one winning line traced
   lineTotalCapMs: 2800,   // all lines of one spin together never take longer than this
   scatterWinMs: 600,      // the vault doors light up together
-  vaultMs: 1400,          // vault door swing before the first free spin
+  vaultMs: 1900,          // vault door shakes, leaks light and swings open before the first free spin
   retriggerMs: 700,       // extra free spins flash
   betweenSpinsMs: 250,    // pause before the next free spin starts turning
   totalMs: 1600,          // final banner after a round with free spins

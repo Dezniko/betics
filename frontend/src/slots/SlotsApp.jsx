@@ -45,6 +45,9 @@ function useViewport() {
 }
 const Minus = () => <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden="true"><path d="M6 12h12" /></svg>;
 const Plus = () => <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden="true"><path d="M12 6v12M6 12h12" /></svg>;
+const SpinIcon = () => <svg className="slot-spin-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.6-5.9" /><path d="M20 4v5h-5" /></svg>;
+const COIN_BURST = Array.from({ length: 14 }, (_, i) => { const a = (-90 + (i - 6.5) * 13) * Math.PI / 180, r = 70 + (i % 3) * 30; return { dx: `${Math.round(Math.cos(a) * r)}px`, dy: `${Math.round(Math.sin(a) * r - 20)}px`, rot: `${(i % 2 ? 1 : -1) * (180 + i * 25)}deg`, t: `${0.8 + (i % 4) * 0.12}s`, delay: `${(i % 5) * 0.04}s` }; });
+const COIN_RAIN = Array.from({ length: 20 }, (_, i) => ({ x: `${(i * 23 + 7) % 100}%`, d: `${1.3 + (i % 4) * 0.25}s`, delay: `${-((i * 0.37) % 1.6)}s`, drift: `${(i % 2 ? 1 : -1) * (10 + (i % 3) * 12)}px`, rot: `${(i % 2 ? 1 : -1) * 540}deg` }));
 const LockGlyph = () => <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>;
 
 export default function SlotsApp() {
@@ -131,6 +134,9 @@ export default function SlotsApp() {
   const [door, setDoor] = useState(false);
   const [celebration, setCelebration] = useState(null); // big and mega wins: WinCelebration overlay
   const [winShown, setWinShown] = useState(0);
+  const [burstKey, setBurstKey] = useState(0); // coin burst from the win amount
+  const [counterFlash, setCounterFlash] = useState(0); // retrigger flashes the free spin counter
+  const [hidden, setHidden] = useState(() => typeof document !== 'undefined' && document.hidden);
   const [lastRound, setLastRound] = useState(null);
   const [lastReceipt, setLastReceipt] = useState(null);
   const [lastVerdict, setLastVerdict] = useState(null);
@@ -196,17 +202,21 @@ export default function SlotsApp() {
           sfx.spinLoopStart();
           break;
         }
-        case 'reel-stop':
+        case 'reel-stop': {
           setReelStates((s) => s.map((v, i) => (i === step.reel ? 'stopped' : v)));
-          sfx.reelStop(step.reel);
+          const column = spin.grid.map((row) => row[step.reel]);
+          sfx.reelStop(step.reel, { sparkle: column.includes('W') || column.includes('S') || column.includes('D') });
+          if (column.includes('W')) sfx.portraitLand();
           if (step.reel === SLOT_MATH.reels - 1) { sfx.spinLoopStop(); sfx.anticipation(false); }
           break;
+        }
         case 'scatter': setScatterHot(true); sfx.scatter(step.count); break;
         case 'anticipation': setAnticipationFrom(step.fromReel); sfx.anticipation(true); break;
         case 'anticipation-end': setAnticipationFrom(null); sfx.anticipation(false); break;
         case 'line-win': {
           setActiveLine(step.line); setWinCells(winningCells(step.line, step.count)); setDimming(true);
           sfx.lineWin(['win', 'nice', 'big', 'mega'].indexOf(step.tier));
+          if (step.symbol === 'W') sfx.voice('gods_of_power');
           break;
         }
         case 'scatter-win': {
@@ -221,7 +231,9 @@ export default function SlotsApp() {
           const from = base + paid, to = from + step.amount;
           paid += step.amount;
           setBanner({ kind: 'win', amount: step.amount, tier: step.tier, multiplier: step.multiplier });
-          if (bigWin) { setCelebration({ total: step.amount, stake: data.stake, phase: 'totaling', pace }); sfx.coinShower(step.duration); }
+          setBurstKey((k) => k + 1);
+          if (step.tier === 'nice') sfx.voice('nice_win');
+          if (bigWin) { setCelebration({ total: step.amount, stake: data.stake, phase: 'totaling', pace }); sfx.coinShower(step.duration); sfx.voice(step.tier === 'mega' ? 'mega_win' : 'big_win'); }
           await tween(step.duration, (t) => {
             const e = countEase(t);
             setWinShown(Math.round(step.amount * e));
@@ -233,11 +245,11 @@ export default function SlotsApp() {
         }
         case 'free-intro':
           setBanner({ kind: 'free-intro', count: step.spinsAwarded }); setDoor(true);
-          sfx.vaultOpen(); sfx.fanfare();
+          sfx.vaultOpen(); sfx.fanfare(); sfx.voice('free_spins'); sfx.voice('vault_open', { queue: true });
           break;
         case 'retrigger':
-          setBanner({ kind: 'retrigger', added: step.added }); setFreeLeft((n) => n + step.added);
-          sfx.retrigger();
+          setBanner({ kind: 'retrigger', added: step.added }); setFreeLeft((n) => n + step.added); setCounterFlash((k) => k + 1);
+          sfx.retrigger(); sfx.voice('more_spins');
           break;
         case 'total':
           setBanner({ kind: 'total', amount: step.amount, freeSpins: step.freeSpins, capped: step.capped });
@@ -309,7 +321,22 @@ export default function SlotsApp() {
     autoRef.current = true; setAutoSpin(true);
     spin();
   };
-  useEffect(() => () => { cancelAnimationFrame(rafRef.current); sfx.spinLoopStop(); }, []);
+  useEffect(() => () => { cancelAnimationFrame(rafRef.current); sfx.spinLoopStop(); sfx.ambientStop(); }, []);
+  // Hidden tab: particles pause and the ambient bed stops; back in view they resume.
+  useEffect(() => {
+    const on = () => { setHidden(document.hidden); if (document.hidden) sfx.ambientStop(); else if (sfx.unlocked()) sfx.ambientStart(); };
+    document.addEventListener('visibilitychange', on); return () => document.removeEventListener('visibilitychange', on);
+  }, []);
+  // The first gesture of the session unlocks audio, starts the quiet ambient bed and says welcome once per session.
+  useEffect(() => {
+    const once = () => {
+      window.removeEventListener('pointerdown', once); window.removeEventListener('keydown', once);
+      ensureAudioContext(); sfx.ambientStart();
+      try { if (!sessionStorage.getItem('betics:slot-welcome')) { sessionStorage.setItem('betics:slot-welcome', '1'); sfx.voice('welcome'); } } catch { sfx.voice('welcome'); }
+    };
+    window.addEventListener('pointerdown', once); window.addEventListener('keydown', once);
+    return () => { window.removeEventListener('pointerdown', once); window.removeEventListener('keydown', once); };
+  }, []);
 
   // Space spins, Escape stops auto.
   const keysRef = useRef({}); keysRef.current = { spin, ready, anyModal, autoSpin, stopAuto };
@@ -334,7 +361,7 @@ export default function SlotsApp() {
     error && { kind: 'error', className: 'game-error', title: toastTitle('error', error, blocked), text: error, dismissible: !blocked, testid: 'slot-error' },
   ].filter(Boolean);
 
-  return <div className={`slot-app casino-app noselect layout-${layout}`} data-layout={layout} data-phase={phase} data-background-locked={anyModal || undefined}>
+  return <div className={`slot-app casino-app noselect layout-${layout}`} data-layout={layout} data-phase={phase} data-background-locked={anyModal || undefined} data-hidden={hidden || undefined}>
     <header className="slot-header" inert={anyModal ? true : undefined}>
       <div className="slot-brand">
         <BrandLogo />
@@ -376,15 +403,22 @@ export default function SlotsApp() {
         {/* felt-table: the shared win celebration centres its banner on this element */}
         <div className={`slot-vault felt-table${freeMode ? ' free' : ''}${anticipationFrom != null ? ' tense' : ''}`} data-testid="slot-vault">
           <div className="slot-vault-bar">
-            {freeMode ? <><span className="slot-free-count" data-testid="slot-free-count">{C.freeSpins(freeLeft)}</span><span className="slot-x2" data-testid="slot-x2">{C.doubled}</span></>
+            {freeMode ? <><span key={`fc-${counterFlash}`} className={`slot-free-count${counterFlash ? ' flash' : ''}`} data-testid="slot-free-count">{C.freeSpins(freeLeft)}</span><span className="slot-x2" data-testid="slot-x2">{C.doubled}</span></>
               : banner?.kind === 'win' || banner?.kind === 'total' ? <span className="slot-last-win">{banner.kind === 'total' ? C.total : 'Win'} <b>{fmtMoney(banner.kind === 'total' ? banner.amount : winShown)}</b></span>
                 : <span className="slot-vault-title">{C.subtitle}</span>}
           </div>
-          <Reels grid={grid} stops={stops} reelStates={reelStates} spinKey={spinKey} activeLine={activeLine} winCells={winCells} dimming={dimming} scatterHot={scatterHot} anticipationFrom={anticipationFrom} onTap={skip}>
+          <Reels grid={grid} stops={stops} reelStates={reelStates} spinKey={spinKey} activeLine={activeLine} winCells={winCells} dimming={dimming} scatterHot={scatterHot} anticipationFrom={anticipationFrom} onTap={skip} dust={mobile ? 8 : 16}>
             <AnimatePresence>
               {door && <motion.div key="door" className="slot-door" initial={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }} aria-hidden="true">
                 <div className="slot-door-leaf left" /><div className="slot-door-leaf right" />
+                <div className="slot-door-seam" /><div className="slot-door-dust" /><div className="slot-door-dust two" /><div className="slot-door-dust three" />
               </motion.div>}
+              {burstKey > 0 && phase === 'presenting' && banner?.kind === 'win' && <div key={`coins-${burstKey}`} className="slot-coins" aria-hidden="true">
+                {COIN_BURST.slice(0, mobile ? 8 : 14).map((c, i) => <i key={i} style={{ '--dx': c.dx, '--dy': c.dy, '--rot': c.rot, '--t': c.t, '--delay': c.delay }} />)}
+              </div>}
+              {celebration && <div key={`rain-${spinKey}`} className="slot-rain" aria-hidden="true">
+                {COIN_RAIN.slice(0, mobile ? 10 : 20).map((c, i) => <i key={i} style={{ '--x': c.x, '--d': c.d, '--delay': c.delay, '--drift': c.drift, '--rot': c.rot }} />)}
+              </div>}
               {banner && banner.kind !== 'win' && <motion.div key={`${banner.kind}-${spinKey}`} className={`slot-banner slot-banner-${banner.kind}`} data-testid="slot-banner" role="status"
                 initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.96 }} transition={{ type: 'spring', stiffness: 380, damping: 30 }}>
                 <div className="slot-banner-box">
@@ -410,7 +444,7 @@ export default function SlotsApp() {
         <button type="button" className="slot-btn slot-pays" data-testid="slot-paytable-btn" onClick={() => setPaytableOpen(true)}>{C.paytable}</button>
         <button type="button" className={`slot-btn slot-auto${autoSpin ? ' on' : ''}`} data-testid="slot-auto" aria-pressed={autoSpin} onClick={toggleAuto} disabled={!autoSpin && !ready}>{autoSpin ? C.autoOn : C.auto}</button>
         <button type="button" className="slot-spin" data-testid="slot-spin" onClick={spin} disabled={!ready || autoSpin} aria-label="Spin (Space)">
-          <span>{spinLabel}</span>
+          <SpinIcon /><span>{spinLabel}</span>
         </button>
         <button type="button" className="slot-btn slot-fair" data-testid="slot-fairness-btn" onClick={() => setFairnessOpen(true)}>{C.fairness}</button>
       </section>
