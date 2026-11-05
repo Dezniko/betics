@@ -12,7 +12,7 @@ import { AgeGate } from '../Terms.jsx';
 import WinCelebration from '../WinCelebration.jsx';
 import { useCasinoReserve } from '../CasinoReserve.jsx';
 import { shortAddress } from '../walletApi.js';
-import { fmtMoney, fmtShort } from '../chips.js';
+import { fmtMoney, fmtTics } from '../chips.js';
 import { displayedBalanceCents } from '../balanceDisplay.js';
 import { isCommitmentValid, isNextCommitmentSafe, readRevealedHashes, rememberRevealedSeed } from '../fairnessClient.js';
 import { postJsonWithTimeout, classifySpinRefusal } from '../spinRefusal.js';
@@ -101,6 +101,10 @@ export default function SlotsApp() {
   const [committedStake, setCommittedStake] = useState(0);
   const [balanceOverride, setBalanceOverride] = useState(null);
   const shownBalance = displayedBalanceCents({ balanceCents: balance, committedStakeCents: committedStake, overrideCents: balanceOverride });
+  // Portrait phones show whole $TICS when the settled balance is whole, and keep that width while a win
+  // counts up (a count-up value with cents must not widen the header mid-animation).
+  const portraitDecimals = balance != null && Math.round(balance) % 100 === 0 ? 0 : 2;
+  const balanceText = user && shownBalance != null ? (layout === 'portrait' ? fmtTics(balanceOverride != null ? Math.round(shownBalance / (portraitDecimals ? 1 : 100)) * (portraitDecimals ? 1 : 100) : shownBalance, { decimals: portraitDecimals }) : fmtMoney(shownBalance)) : '...';
   const levelStates = useMemo(() => betLevelStates({ tableLimit, balance, minStakeCents: config?.minStakeCents ?? null, maxStakeCents: config?.maxStakeCents ?? null }), [tableLimit, balance, config?.minStakeCents, config?.maxStakeCents]);
   const betState = levelStates.find((s) => s.stake === bet) || { allowed: true, reason: null };
   // When the limit or the balance drops, the selected bet follows (never silently above a limit).
@@ -384,7 +388,7 @@ export default function SlotsApp() {
               {modeInfo.demoVisible && <button type="button" aria-pressed={mode === 'demo'} data-testid="mode-demo" className={mode === 'demo' ? 'on' : ''} disabled={busy || autoSpin} title="Play with demo $TICS" onClick={() => chooseMode('demo')}>Demo</button>}
             </div>}
           </div>
-          <div className="gold-text slot-balance-amount"><span data-balance-target="header" data-testid="header-balance" data-mode={mode}>{user && shownBalance != null ? (layout === 'portrait' ? fmtShort(shownBalance) : fmtMoney(shownBalance)) : '...'}</span></div>
+          <div className="gold-text slot-balance-amount"><span data-balance-target="header" data-testid="header-balance" data-mode={mode} className={balanceText.length > 14 ? 'long' : undefined}>{balanceText}</span></div>
         </div>
         {profile ? (
           <button type="button" className={`wallet-chip ${walletOpen ? 'open' : ''}`} data-testid="wallet-chip" aria-expanded={walletOpen} onClick={() => setWalletOpen(true)} title="Your profile">

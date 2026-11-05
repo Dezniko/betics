@@ -36,7 +36,10 @@ body:has(.slot-app) { height: 100dvh; min-height: 0; overflow: hidden; overscrol
 .slot-balance-amount { font-size: 18px; line-height: 22px; font-weight: 800; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .slot-header .wallet-connect, .slot-header .wallet-chip { min-height: 30px; padding: 0 9px; font-size: 11px; border-radius: 9px; }
 .slot-header .wallet-chip { padding: 0 3px 0 9px; gap: 6px; }
-.layout-portrait .slot-header-right { flex-direction: column; align-items: flex-end; gap: 4px; }
+.layout-portrait .slot-header-right { flex-direction: column; align-items: flex-end; gap: 4px; flex: 0 1 auto; min-width: 0; max-width: 60%; }
+.layout-portrait .slot-balance-amount { max-width: 100%; overflow: hidden; }
+.layout-portrait .slot-balance-amount .long { font-size: 15px; }
+.slot-balance-amount .long { letter-spacing: -0.01em; }
 .layout-portrait .wc-long { display: none; } .layout-portrait .wc-short { display: inline; }
 .layout-landscape .slot-brand { grid-template-columns: auto auto auto auto; grid-template-areas: "logo lock link sound"; gap: 0 8px; }
 .slot-app.layout-landscape .slot-brand .brand-logo img { height: 30px; }
