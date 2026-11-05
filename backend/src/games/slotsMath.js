@@ -8,7 +8,7 @@ export const BET_LEVELS = Object.freeze([2000, 4000, 10000, 20000, 50000, 100000
 export const SYMBOLS = Object.freeze([
   { code: 'W', name: 'Gods of Power', role: 'wild' },
   { code: 'S', name: 'Vault door', role: 'scatter' },
-  { code: 'D', name: 'Diamond' },
+  { code: 'D', name: 'Qubetics' },
   { code: 'B', name: 'Gold bar' },
   { code: 'R', name: 'Ruby' },
   { code: 'C', name: 'Coins' },

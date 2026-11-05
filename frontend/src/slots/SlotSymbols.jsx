@@ -107,10 +107,13 @@ export const LetterK = () => <Letter code="K" glyph="K" glow="#4a5cff" />;
 export const LetterQ = () => <Letter code="Q" glyph="Q" glow="#22d3ff" />;
 export const LetterJ = () => <Letter code="J" glyph="J" glow="#7c6bff" />;
 
+// Qubetics (top regular symbol): the official Qubetics logo (used with permission) on a dark plaque.
+export const Qubetics = () => <img className="slot-sym slot-sym-D slot-sym-img" src="/slots/qubetics.webp" width="512" height="512" alt={symbolName('D')} draggable="false" />;
+
 export const SYMBOL_COMPONENTS = Object.freeze({
   W: GodsOfPower,
   S: VaultDoor,
-  D: Diamond,
+  D: Qubetics,
   B: GoldBar,
   R: Ruby,
   C: CoinStack,
