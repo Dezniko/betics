@@ -72,7 +72,7 @@ body:has(.slot-app) { height: 100dvh; min-height: 0; overflow: hidden; overscrol
 }
 .slot-vault.free { --vault-glow: rgba(214, 176, 106, 0.55); }
 .slot-vault.tense { --vault-glow: rgba(34, 211, 255, 0.7); }
-.layout-portrait .slot-vault { --vault-ratio: 1.22; }
+.layout-portrait .slot-vault { --vault-ratio: 1.02; }
 .layout-landscape .slot-vault { --vault-ratio: 1.5; }
 .layout-desktop .slot-vault { --vault-ratio: 1.6; width: min(100cqw, calc(100cqh * var(--vault-ratio)), 860px); }
 .slot-vault-bar { flex: 0 0 auto; height: 22px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 6px; font-family: var(--bx-display); font-size: 9px; letter-spacing: .22em; color: var(--bx-gold); text-transform: uppercase; }

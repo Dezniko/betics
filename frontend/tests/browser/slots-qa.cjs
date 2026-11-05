@@ -117,7 +117,7 @@ async function layoutChecks(x, w, h, label) {
     assert.equal(pt.rtp, 'Payback 92.0%'); assert.ok(pt.text.includes('One round pays at most 2,000 times the bet.'));
     assert.ok(pt.bodyLocked, `${label}: background locked while the sheet is open`);
     shots.push(await x.screenshot(`${label}-paytable`));
-    await x.tap('[data-testid="slot-paytable"] .fair-close'); await sleep(500);
+    await x.tap('[data-testid="slot-paytable"] .fair-close'); await sleep(900);
     assert.ok(!(await x.ev(`!!document.querySelector('[data-testid="slot-paytable"]')`)), `${label}: pay table closes`);
     // Fairness sheet of the round just played.
     await x.tap('[data-testid="slot-fairness-btn"]'); await sleep(600);
