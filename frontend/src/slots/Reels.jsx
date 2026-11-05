@@ -1,7 +1,7 @@
 import { memo, useMemo } from 'react';
 import { SLOT_MATH } from '../../../backend/src/games/slotsMath.js';
 import { SlotSymbol } from './SlotSymbols.jsx';
-import { linePath } from './slotAnim.js';
+import { linePoints } from './slotAnim.js';
 
 // The 5 x 3 reel window. Everything that moves is a transform or an opacity: a spinning reel is a long
 // strip of tiles sliding with a CSS animation (blurred, with streaks), a landed reel is a 5 tile strip (one
@@ -62,7 +62,7 @@ const Dust = ({ count }) => <div className="slot-dust" aria-hidden="true">
 function Reels({ grid, stops, reelStates, spinKey, activeLine, activeCount = 5, winCells, dimming, scatterHot, anticipationFrom, onTap, dust = 8, children }) {
   const winSet = useMemo(() => new Set((winCells || []).map((c) => key(c.reel, c.row))), [winCells]);
   const columns = useMemo(() => Array.from({ length: SLOT_MATH.reels }, (_, reel) => grid.map((row) => row[reel])), [grid]);
-  const path = activeLine != null ? linePath(activeLine, activeCount) : null;
+  const points = activeLine != null ? linePoints(activeLine) : null;
   return <div className="slot-reels-wrap" onPointerDown={onTap} data-testid="slot-reels">
     <div className="slot-reels">
       {columns.map((column, reel) => <Reel key={reel} reel={reel} state={reelStates[reel]} stop={stops ? stops[reel] : 0} column={column} spinKey={spinKey}
@@ -70,13 +70,10 @@ function Reels({ grid, stops, reelStates, spinKey, activeLine, activeCount = 5, 
     </div>
     <Dust count={dust} />
     <svg className="slot-lines" viewBox="0 0 500 300" preserveAspectRatio="none" aria-hidden="true">
-      <defs>
-        <linearGradient id="slot-line-gold" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stopColor="#f1dcaa" /><stop offset=".5" stopColor="#fff6d8" /><stop offset="1" stopColor="#d6b06a" /></linearGradient>
-      </defs>
-      {path && <g key={`${spinKey}-${activeLine}`}>
-        <path className="slot-line halo" d={path} fill="none" stroke="#d6b06a" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" pathLength="1" />
-        <path className="slot-line core" d={path} fill="none" stroke="url(#slot-line-gold)" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" pathLength="1" />
-        <path className="slot-line sparkle" d={path} fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" pathLength="1" />
+      {points && <g key={`${spinKey}-${activeLine}`}>
+        <polyline className="slot-line halo" points={points} fill="none" stroke="#22d3ff" strokeWidth="12" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" pathLength="1" />
+        <polyline className="slot-line core" points={points} fill="none" stroke="#22d3ff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" pathLength="1" />
+        <polyline className="slot-line sparkle" points={points} fill="none" stroke="#e9fbff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" pathLength="1" />
       </g>}
     </svg>
     {children}
