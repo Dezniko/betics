@@ -1,0 +1,159 @@
+/* Casino lobby at /. Every rule is prefixed .lobby- or .game-card and uses the --bx-* brand tokens.
+   One screen on every viewport: the page never scrolls; cards shrink with the viewport. */
+
+body:has(.lobby) { height: 100dvh; min-height: 0; overflow: hidden; overscroll-behavior: none; }
+.lobby {
+  box-sizing: border-box; height: 100dvh; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 10px;
+  padding: calc(8px + env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-right, 0px)) calc(8px + env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px));
+  color: var(--bx-text);
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(166, 60, 255, 0.18), transparent 70%),
+    radial-gradient(ellipse 60% 40% at 100% 100%, rgba(34, 211, 255, 0.09), transparent 70%),
+    radial-gradient(ellipse 50% 35% at 0% 80%, rgba(74, 92, 255, 0.10), transparent 70%),
+    var(--bx-bg);
+}
+.lobby.layout-desktop { gap: 16px; padding: 18px 28px 16px; }
+.lobby.layout-landscape { gap: 6px; padding: calc(4px + env(safe-area-inset-top, 0px)) max(10px, env(safe-area-inset-right, 0px)) calc(4px + env(safe-area-inset-bottom, 0px)) max(10px, env(safe-area-inset-left, 0px)); }
+
+/* ---- header: same family as the games ---- */
+.lobby-header { position: relative; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; max-width: 1180px; margin: 0 auto; min-width: 0; }
+.lobby-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.lobby.casino-app .lobby-brand .brand-logo img { height: 36px; margin: 0; }
+.lobby .brand-beta { top: 0; right: -2px; transform: none; padding: 2px 4px 1px; font-size: 6px; letter-spacing: .1em; box-shadow: 0 0 6px rgba(130, 80, 255, 0.35); }
+.lobby-sub { display: none; margin: 0; }
+.lobby-brand .sound-toolbar { margin: 0; }
+.lobby-brand .sound-toolbar > button { width: 28px; height: 26px; }
+.lobby-header-right { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.lobby-balance { text-align: right; }
+.lobby-balance-row { display: flex; align-items: center; justify-content: flex-end; gap: 6px; font-size: 8px; line-height: 12px; color: var(--bx-mute); }
+.lobby-balance .mode-switch > button { min-width: 34px; padding: 0 6px; font-size: 10px; line-height: 16px; }
+.lobby-balance-amount { font-size: 18px; line-height: 22px; font-weight: 800; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.lobby-header .wallet-connect, .lobby-header .wallet-chip { min-height: 30px; padding: 0 9px; font-size: 11px; border-radius: 9px; }
+.lobby-header .wallet-chip { padding: 0 3px 0 9px; gap: 6px; }
+.layout-portrait .lobby-header-right { flex-direction: column; align-items: flex-end; gap: 4px; flex: 0 1 auto; min-width: 0; max-width: 60%; }
+.layout-portrait .lobby-balance-amount { max-width: 100%; overflow: hidden; }
+.layout-portrait .lobby-balance-amount .long { font-size: 15px; }
+.layout-portrait .wc-long { display: none; } .layout-portrait .wc-short { display: inline; }
+.lobby.layout-landscape .lobby-brand .brand-logo img { height: 30px; }
+.layout-landscape .lobby-balance { display: flex; align-items: baseline; gap: 8px; }
+.layout-landscape .lobby-balance-amount { font-size: 16px; }
+.layout-desktop .lobby-brand { gap: 14px; }
+.lobby.layout-desktop .lobby-brand .brand-logo img { height: 64px; }
+.lobby.layout-desktop .brand-beta { font-size: 7px; right: -4px; }
+.layout-desktop .lobby-sub { display: block; }
+.layout-desktop .lobby-brand .sound-toolbar > button { width: 32px; height: 30px; }
+.layout-desktop .lobby-balance-row { font-size: 9px; }
+.layout-desktop .lobby-balance-amount { font-size: 24px; line-height: 28px; }
+.layout-desktop .lobby-header .wallet-connect, .layout-desktop .lobby-header .wallet-chip { min-height: 38px; padding: 0 14px; font-size: 13px; }
+.layout-desktop .lobby-header .wallet-chip { padding: 0 4px 0 14px; }
+.lobby-header .game-toasts { top: calc(100% + 6px); }
+
+/* ---- main ---- */
+.lobby-main { flex: 1 1 0; min-height: 0; min-width: 0; width: 100%; max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+.layout-desktop .lobby-main { gap: 14px; }
+.layout-landscape .lobby-main { gap: 6px; }
+.lobby-welcome { flex: 0 0 auto; margin: 0; text-align: center; font-size: 13px; line-height: 1.35; color: #cfcbdb; }
+.layout-desktop .lobby-welcome { font-size: 16px; margin-top: 2px; }
+.layout-landscape .lobby-welcome { font-size: 11px; line-height: 1.2; }
+
+.lobby-games { flex: 1 1 0; min-height: 0; display: grid; gap: 12px; }
+.layout-portrait .lobby-games { grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+.layout-landscape .lobby-games, .layout-desktop .lobby-games { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.layout-landscape .lobby-games { gap: 10px; }
+.layout-desktop .lobby-games { gap: 22px; }
+
+/* A game card: visual on top, name in Michroma, one line, small facts and a gold Play button.
+   Hover and press move the card only (transform, opacity); the rim glow is a pseudo element. */
+.game-card {
+  --card-glow: rgba(166, 60, 255, 0.5);
+  position: relative; box-sizing: border-box; min-height: 0; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 0; overflow: hidden; cursor: pointer;
+  border-radius: 20px; border: 1px solid rgba(255, 255, 255, 0.11);
+  background: linear-gradient(180deg, rgba(22, 22, 32, 0.96), rgba(11, 11, 17, 0.98));
+  box-shadow: 0 0 0 2px #0a0a10, 0 0 26px var(--card-glow), inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 18px 44px rgba(0, 0, 0, 0.55);
+  transition: transform .22s var(--ease-out, ease), box-shadow .3s ease; will-change: transform;
+}
+.game-card::before { content: ''; position: absolute; inset: -1px; border-radius: inherit; pointer-events: none; padding: 1px;
+  background: linear-gradient(135deg, rgba(166, 60, 255, 0.8), rgba(74, 92, 255, 0.35) 45%, rgba(34, 211, 255, 0.75));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; opacity: .55; transition: opacity .25s ease; }
+.game-card-godsofpower { --card-glow: rgba(214, 176, 106, 0.32); }
+@media (hover: hover) {
+  .game-card:hover { transform: translateY(-3px) scale(1.012); box-shadow: 0 0 0 2px #0a0a10, 0 0 44px var(--card-glow), inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 24px 54px rgba(0, 0, 0, 0.6); }
+  .game-card:hover::before { opacity: 1; }
+  .game-card:hover .game-play { box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25), 0 0 26px rgba(214, 176, 106, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.45); }
+}
+.game-card:active { transform: translateY(0) scale(0.99); }
+@media (prefers-reduced-motion: reduce) { .game-card, .lobby-wheel-rotor { transition: none; animation: none !important; } }
+
+.game-card-visual { position: relative; min-height: 0; min-width: 0; overflow: hidden; container-type: size; }
+.game-card-roulette .game-card-visual { background: radial-gradient(ellipse 70% 70% at 50% 60%, #0f3d2b 0%, #0a2a1f 45%, #06130f 100%); }
+.game-card-godsofpower .game-card-visual { background:
+  radial-gradient(circle at 10px 10px, rgba(255,255,255,.14) 1.5px, transparent 2px) 0 0 / 22px 22px,
+  radial-gradient(ellipse 70% 60% at 50% 55%, rgba(166, 60, 255, 0.28), transparent 70%),
+  linear-gradient(135deg, #2a2d3a 0%, #171923 45%, #1e2130 70%, #0f1118 100%); }
+.game-card-visual::after { content: ''; position: absolute; inset: auto 0 0 0; height: 34%; pointer-events: none; background: linear-gradient(180deg, transparent, rgba(11, 11, 17, 0.9)); }
+
+.lobby-wheel { position: absolute; left: 50%; top: 50%; width: min(88cqw, 96cqh); aspect-ratio: 1; transform: translate(-50%, -50%); filter: drop-shadow(0 10px 24px rgba(0, 0, 0, 0.6)); }
+.lobby-wheel svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.lobby-wheel-rotor { position: absolute; inset: 0; animation: lobby-turn 48s linear infinite; }
+@keyframes lobby-turn { to { transform: rotate(360deg); } }
+
+.lobby-collage { position: absolute; inset: 0; }
+.lobby-collage img { position: absolute; width: auto; height: auto; max-width: none; filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.6)); }
+.lobby-collage-hero { left: 50%; top: 50%; height: min(92cqh, 100cqw) !important; aspect-ratio: 1; transform: translate(-50%, -46%); filter: drop-shadow(0 0 28px rgba(214, 176, 106, 0.35)) drop-shadow(0 10px 20px rgba(0, 0, 0, 0.6)) !important; }
+.lobby-collage-sym { height: min(38cqh, 42cqw) !important; aspect-ratio: 1; opacity: .95; }
+.lobby-collage-sym.a { left: 6%; top: 10%; transform: rotate(-12deg); }
+.lobby-collage-sym.b { right: 7%; top: 8%; transform: rotate(10deg); }
+.lobby-collage-sym.c { right: 4%; bottom: 4%; height: min(46cqh, 48cqw) !important; transform: rotate(-6deg); }
+
+.game-card-body { position: relative; box-sizing: border-box; height: 148px; align-content: center; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'name play' 'tag play' 'facts play'; align-items: center; gap: 4px 12px; padding: 10px 14px 12px; }
+.game-card-name { grid-area: name; margin: 0; font-family: var(--bx-display); font-weight: 400; font-size: 17px; letter-spacing: .08em; text-transform: uppercase; color: #fff; text-shadow: 0 0 14px rgba(166, 60, 255, 0.35); }
+.game-card-tagline { grid-area: tag; margin: 0; font-size: 12px; line-height: 1.35; color: #bdb9cb; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.game-card-facts { grid-area: facts; display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 2px 0 0; padding: 0; list-style: none; }
+.game-card-facts li { padding: 2px 7px; border-radius: 999px; border: 1px solid rgba(214, 176, 106, 0.32); background: rgba(214, 176, 106, 0.07); color: var(--bx-gold-hi); font-size: 9.5px; line-height: 14px; letter-spacing: .03em; white-space: nowrap; }
+.game-play { grid-area: play; align-self: center; display: inline-flex; align-items: center; justify-content: center; min-width: 84px; min-height: 42px; padding: 0 18px; border-radius: 12px; text-decoration: none;
+  font-family: var(--bx-display); font-size: 13px; letter-spacing: .18em; text-transform: uppercase; color: #0e0e15;
+  background: linear-gradient(180deg, var(--bx-gold-hi), var(--bx-gold) 55%, #b98f45); border: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 0 0 0 1px rgba(214, 176, 106, 0.3), 0 0 18px rgba(214, 176, 106, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.45); text-shadow: 0 1px 0 rgba(255, 255, 255, 0.25); touch-action: manipulation;
+  transition: transform .15s ease, box-shadow .25s ease; }
+.game-play:active { transform: scale(0.97); }
+
+.layout-desktop .game-card { border-radius: 24px; }
+.layout-desktop .game-card-body { height: 168px; padding: 16px 22px 18px; gap: 6px 18px; }
+.layout-desktop .game-card-name { font-size: 24px; }
+.layout-desktop .game-card-tagline { font-size: 14px; }
+.layout-desktop .game-card-facts li { font-size: 11px; line-height: 18px; padding: 2px 10px; }
+.layout-desktop .game-play { min-width: 128px; min-height: 52px; font-size: 15px; border-radius: 14px; }
+
+/* Short landscape phones: the visual sits on the left, the text on the right, so two cards fit side by side. */
+.layout-landscape .game-card { grid-template-columns: minmax(0, 38%) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); border-radius: 16px; }
+.layout-landscape .game-card-visual::after { inset: 0 0 0 auto; width: 30%; height: auto; background: linear-gradient(90deg, transparent, rgba(11, 11, 17, 0.85)); }
+.layout-landscape .lobby-wheel { width: min(100cqw, 96cqh); }
+.layout-landscape .lobby-collage-hero { height: min(84cqh, 100cqw) !important; transform: translate(-50%, -44%); }
+.layout-landscape .game-card-body { height: auto; grid-template-columns: minmax(0, 1fr); grid-template-areas: 'name' 'tag' 'facts' 'play'; align-content: center; gap: 3px; padding: 8px 10px 8px 6px; }
+.layout-landscape .game-card-name { font-size: 14px; }
+.layout-landscape .game-card-tagline { font-size: 10.5px; line-height: 1.25; }
+.layout-landscape .game-card-facts li { font-size: 8.5px; line-height: 12px; padding: 1px 6px; }
+.layout-landscape .game-play { justify-self: start; min-width: 72px; min-height: 32px; font-size: 11px; margin-top: 3px; border-radius: 9px; }
+
+/* ---- under the cards: reserve card (desktop) and the help links ---- */
+.lobby-foot { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.layout-desktop .lobby-foot { flex-direction: row; justify-content: space-between; align-items: center; gap: 24px; }
+.layout-desktop .lobby-reserve { max-width: 560px; padding: 12px 16px; }
+.layout-desktop .lobby-reserve .casino-reserve-note { display: none; }
+.lobby-links { display: flex; align-items: center; justify-content: center; flex-wrap: nowrap; gap: 8px; min-width: 0; }
+.lobby-links .lobby-support { padding: 5px 10px; gap: 8px; }
+.lobby-links .lobby-support .profile-support-icon { width: 24px; height: 24px; }
+.lobby-links .lobby-support .profile-support-text strong { font-size: 11px; }
+.lobby-links .lobby-support .profile-support-text small { display: none; }
+.lobby-links .lobby-support .profile-support-arrow { display: none; }
+.lobby-link-pill { display: inline-flex; align-items: center; min-height: 34px; padding: 0 12px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.13); background: linear-gradient(180deg, #1a1a24, #111118); color: #d8d4e2; font-size: 11px; font-weight: 600; text-decoration: none; white-space: nowrap; touch-action: manipulation; transition: border-color .15s ease; }
+@media (hover: hover) { .lobby-link-pill:hover { border-color: rgba(150, 120, 255, 0.6); color: #fff; } }
+.layout-landscape .lobby-links { gap: 6px; }
+.layout-landscape .lobby-link-pill { min-height: 26px; font-size: 10px; padding: 0 9px; }
+.layout-landscape .lobby-links .lobby-support { padding: 2px 8px; min-height: 26px; }
+.layout-landscape .lobby-links .lobby-support .profile-support-icon { width: 18px; height: 18px; }
+.layout-landscape .lobby-links .lobby-support .profile-support-icon svg { width: 11px; height: 11px; }
+.layout-desktop .lobby-links { justify-content: flex-end; gap: 10px; }
+.layout-desktop .lobby-link-pill { min-height: 38px; font-size: 12px; padding: 0 16px; }
+.layout-desktop .lobby-links .lobby-support .profile-support-text small { display: block; }
+.layout-desktop .lobby-links .lobby-support .profile-support-arrow { display: block; }

@@ -18,7 +18,7 @@ async function open(w,h,mocked=true,safe=null){
   const decode=P.decodeAudioData,create=P.createBufferSource;
   P.decodeAudioData=function(bytes,...rest){const name=sizes.get(bytes.byteLength);return decode.call(this,bytes,...rest).then(b=>{b.qaName=name;return b})};
   P.createBufferSource=function(...args){const s=create.apply(this,args),start=s.start;s.start=function(...args){qaSounds.push(s.buffer?.qaName||'other');return start.apply(this,args)};return s};
- })()`});await send('Page.navigate',{url:APP_URL+(mocked?'/?mode=valid':'')});
+ })()`});await send('Page.navigate',{url:APP_URL+(mocked?'/roulette?mode=valid':'/roulette')});
  for(let i=0;i<150;i++){await sleep(100);if(await ev(`/Next lock[^a-f0-9]*[a-f0-9]{8}/.test(document.body.innerText)`))break;}
  const screenshot=async name=>{const r=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});fs.writeFileSync(path.join(OUT,name+'.png'),Buffer.from(r.data,'base64'));};
  const tap=async selector=>{const p=await ev(`(()=>{const b=document.querySelector(${JSON.stringify(selector)});if(!b||b.disabled)return null;const r=b.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);assert.ok(p,selector+' enabled');await send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[p]});await send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});};

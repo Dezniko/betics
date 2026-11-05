@@ -13,7 +13,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: w < 900 });
     if (w < 900) await send('Emulation.setTouchEmulationEnabled', { enabled: true });
     await send('Network.clearBrowserCache');
-    await send('Page.navigate', { url: APP }); await sleep(3500);
+    await send('Page.navigate', { url: APP + '/roulette' }); await sleep(3500);
     await ev(`localStorage.setItem('betics:adult:v1','1'); localStorage.setItem('betics:mode:v1','demo'); location.reload()`); await sleep(5000);
     const chips = await ev(`[...document.querySelectorAll('.denom-button')].map(b=>{const r=b.getBoundingClientRect();return {t:b.title,x:r.x,r:r.right,vis:r.right<=innerWidth&&r.x>=0}})`);
     const titles = chips.map((c) => c.t.split(' chip')[0]);

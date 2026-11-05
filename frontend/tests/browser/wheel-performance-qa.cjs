@@ -9,7 +9,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
  const ev=async expression=>{const r=await send('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value};
  await send('Page.enable');await send('Runtime.enable');await send('Emulation.setDeviceMetricsOverride',{width:874,height:298,deviceScaleFactor:2,mobile:true});await send('Emulation.setCPUThrottlingRate',{rate:4});
  if(!process.env.REAL_API)await send('Page.addScriptToEvaluateOnNewDocument',{source:fs.readFileSync(path.join(__dirname,'fixture.js'),'utf8')});
- await send('Page.navigate',{url:(process.env.APP_URL||'http://127.0.0.1:5189')+'/?mode=valid'});
+ await send('Page.navigate',{url:(process.env.APP_URL||'http://127.0.0.1:5189')+'/roulette?mode=valid'});
  for(let i=0;i<120;i++){await sleep(100);if(await ev(`!!document.querySelector('[data-testid="wheel-rotor"]')`))break}
  await sleep(600);
  await ev(`window.qaRotorChanges=0;new MutationObserver(ms=>{qaRotorChanges+=ms.length}).observe(document.querySelector('[data-testid="wheel-rotor"]'),{attributes:true})`);await sleep(650);const changes=await ev('qaRotorChanges');

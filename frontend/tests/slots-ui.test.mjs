@@ -202,3 +202,41 @@ test('main.jsx routes /godsofpower (optional trailing slash) and keeps the other
   assert.match(text, /\/\^\\\/how-it-works\\\/\?\$\//);
   assert.match(text, /SlotsApp/);
 });
+
+// Route: / is the lobby, /roulette (optional trailing slash) the roulette game.
+test('main.jsx routes / to the Lobby and /roulette to the roulette App', () => {
+  const text = fs.readFileSync(path.join(here, '..', 'src', 'main.jsx'), 'utf8');
+  assert.match(text, /\/\^\\\/roulette\\\/\?\$\//);
+  assert.match(text, /import Lobby from '\.\/Lobby\.jsx'/);
+  assert.match(text, /roulette \? <App \/> : <Lobby \/>/, 'anything not matched above falls back to the lobby (the server 404s unknown paths)');
+  // Play the regexes against real paths.
+  const re = (name) => new RegExp(text.match(new RegExp(`const ${name} = /(.*?)/\\.test`))[1]);
+  for (const [name, yes, no] of [['roulette', ['/roulette', '/roulette/'], ['/', '/roulette/x', '/rouletteX']], ['slots', ['/godsofpower', '/godsofpower/'], ['/', '/slots']], ['terms', ['/terms'], ['/termsx']], ['how', ['/how-it-works/'], ['/how']]]) {
+    for (const p of yes) assert.ok(re(name).test(p), `${name} matches ${p}`);
+    for (const p of no) assert.ok(!re(name).test(p), `${name} rejects ${p}`);
+  }
+});
+
+test('in-app links: the logo and Lobby pills go to /, the games are reached at /roulette and /godsofpower', () => {
+  const read = (f) => fs.readFileSync(path.join(here, '..', 'src', f), 'utf8');
+  assert.match(read('LobbyLink.jsx'), /href="\/" data-testid="lobby-link"/);
+  assert.match(read('slots/SlotsApp.jsx'), /<LobbyLink className="slot-link" \/>/);
+  assert.match(read('App.jsx'), /<SoundQuickControls onOpen=\{\(\) => setSoundSettingsOpen\(true\)\}>\{!portraitPhone && <LobbyLink \/>\}/, 'roulette: Lobby pill in the sound toolbar row');
+  assert.match(read('App.jsx'), /\{portraitPhone && <LobbyLink className="lobby-link-row" \/>\}/, 'portrait phones: own short row, so the logo is not squeezed');
+  assert.ok(!/slot-roulette-link/.test(read('slots/SlotsApp.jsx')), 'the old Roulette link is gone');
+  for (const f of ['Terms.jsx', 'HowItWorks.jsx']) assert.match(read(f), /href="\/">Back to the lobby</, `${f} back link goes home`);
+  const lobby = read('Lobby.jsx');
+  assert.match(lobby, /href: '\/roulette'/); assert.match(lobby, /href: '\/godsofpower'/);
+  assert.match(lobby, /European wheel', '97\.3% payback', 'Bets from 1 \$TICS'/);
+  assert.match(lobby, /5 reels, 20 lines', 'Free spins', '92% payback', 'Bets from 20 \$TICS'/);
+  assert.match(lobby, /<AgeGate onAccept=\{session\.acceptAge\} \/>/, 'the 18+ gate shows on the lobby too');
+  assert.match(lobby, /data-testid=\{`play-\$\{game\.id\}`\}/);
+  assert.match(lobby, /<CasinoReserve variant="card"/);
+  assert.match(lobby, /<SupportLink/); assert.match(lobby, /href="\/how-it-works"/); assert.match(lobby, /href="\/terms"/);
+  for (const f of ['Lobby.jsx', 'lobby.css', 'LobbyLink.jsx', 'useSession.js']) {
+    const text = read(f);
+    assert.ok(!/[\u2013\u2014]|\p{Extended_Pictographic}/u.test(text), `${f} has an emoji or long dash`);
+    assert.ok(!/guaranteed|trustless|fully provably fair/i.test(text), `${f} has a banned phrase`);
+  }
+  assert.ok(!/\$\s?\d/.test(lobby), 'amounts read $TICS, never dollars');
+});

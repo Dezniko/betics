@@ -99,7 +99,6 @@ export const PAGE_COPY = Object.freeze({
   retrigger: (added) => `${added} more free spins`,
   total: 'Round total',
   capped: 'Round cap reached',
-  roulette: 'Roulette',
   verificationFailed: 'This round could not be checked against the lock. Play is paused. Reload the page to go on.',
   lostReply: 'The connection dropped before the spin was confirmed. Reload the page to see whether it was played.',
   noLock: 'The lock for your next spin could not be loaded. Please reload the page.',

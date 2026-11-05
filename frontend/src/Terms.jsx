@@ -19,7 +19,7 @@ export { TICS_CONTRACT }; // single source: depositTarget.js
 
 export function TermsPage() {
   return <main className="terms-page">
-    <a className="terms-back" href="/">Back to the game</a>
+    <a className="terms-back" href="/">Back to the lobby</a>
     <img className="terms-logo" src="/brand/logo-480.webp" width="480" height="179" alt="qu-BETICS" />
     <h1>Terms</h1>
     <p className="terms-updated">Last updated 4 November 2026</p>

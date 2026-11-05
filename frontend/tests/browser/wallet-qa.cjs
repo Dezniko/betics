@@ -64,7 +64,7 @@ async function open(w, h, { fresh = false } = {}) {
   if (w < 1100) await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
   await send('Runtime.addBinding', { name: 'qaWallet' });
   await send('Page.addScriptToEvaluateOnNewDocument', { source: mockWallet });
-  await send('Page.navigate', { url: APP + '/' });
+  await send('Page.navigate', { url: APP + '/roulette' });
   const waitFor = async (expr, ms = 15000, label = expr) => { const end = Date.now() + ms; while (Date.now() < end) { try { if (await ev(expr)) return; } catch { /* page loading */ } await sleep(100); } throw Error('Timed out waiting for ' + label); };
   const click = (sel) => ev(`(()=>{const b=document.querySelector(${JSON.stringify(sel)});if(!b||b.disabled)return false;b.click();return true})()`);
   const type = (sel, text) => ev(`(()=>{const i=document.querySelector(${JSON.stringify(sel)});Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(i,${JSON.stringify(text)});i.dispatchEvent(new Event('input',{bubbles:true}));return true})()`);

@@ -26,9 +26,7 @@ body:has(.slot-app) { height: 100dvh; min-height: 0; overflow: hidden; overscrol
 .slot-brand .sound-toolbar { grid-area: sound; margin: 0; justify-self: start; }
 .slot-brand .sound-toolbar > button { width: 28px; height: 26px; }
 .slot-brand .slot-lock { grid-area: lock; font-size: 9px; line-height: 14px; min-height: 24px; margin: 0; }
-.slot-link { grid-area: link; display: inline-flex; align-items: center; gap: 4px; min-height: 24px; padding: 0 9px; border-radius: 999px; border: 1px solid rgba(214, 176, 106, 0.45);
-  background: linear-gradient(180deg, #1a1a24, #111118); color: var(--bx-gold-hi); font-size: 10px; font-weight: 700; letter-spacing: .04em; text-decoration: none; white-space: nowrap; touch-action: manipulation; }
-.slot-link::before { content: ''; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid currentColor; }
+.slot-link { grid-area: link; min-height: 24px; padding: 0 9px; font-size: 8px; }
 .slot-header-right { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .slot-balance { text-align: right; }
 .slot-balance-row { display: flex; align-items: center; justify-content: flex-end; gap: 6px; font-size: 8px; line-height: 12px; color: var(--bx-mute); }
@@ -49,7 +47,7 @@ body:has(.slot-app) { height: 100dvh; min-height: 0; overflow: hidden; overscrol
 .slot-app.layout-desktop .slot-brand .brand-logo img { height: 64px; }
 .layout-desktop .slot-brand .brand-sub { display: block; grid-area: sub; }
 .layout-desktop .slot-brand .slot-lock { font-size: 10px; min-height: 28px; }
-.layout-desktop .slot-link { min-height: 28px; font-size: 11px; }
+.layout-desktop .slot-link { min-height: 28px; font-size: 9px; }
 .layout-desktop .slot-balance-row { font-size: 9px; }
 .layout-desktop .slot-balance-amount { font-size: 24px; line-height: 28px; }
 .layout-desktop .slot-header .wallet-connect, .layout-desktop .slot-header .wallet-chip { min-height: 38px; padding: 0 14px; font-size: 13px; }

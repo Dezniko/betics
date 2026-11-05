@@ -14,7 +14,7 @@ export default function HowItWorksPage() {
   const pct = r?.exposurePct || 25;
   const pinned = reserveWalletMatches(r);
   return <main className="terms-page how-page">
-    <a className="terms-back" href="/">Back to the game</a>
+    <a className="terms-back" href="/">Back to the lobby</a>
     <img className="terms-logo" src="/brand/logo-480.webp" width="480" height="179" alt="qu-BETICS" />
     <h1>How Qubetics Roulette works</h1>
     <p>qu-BETICS is roulette for the Qubetics community, played with $TICS, the official Qubetics token on Ethereum.</p>

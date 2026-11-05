@@ -8,7 +8,7 @@ async function open(mode){
  ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id){const p=pending.get(m.id);pending.delete(m.id);m.error?p.reject(m.error):p.resolve(m.result)}if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails.text)};
  const send=(method,params={})=>new Promise((resolve,reject)=>{const n=++id;pending.set(n,{resolve,reject});ws.send(JSON.stringify({id:n,method,params}))});
  const ev=async expression=>{const r=await send('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value};
- await send('Runtime.enable');await send('Page.enable');await send('Page.addScriptToEvaluateOnNewDocument',{source:fixture});await send('Page.navigate',{url:APP_URL+'/?mode='+mode});await sleep(1000);
+ await send('Runtime.enable');await send('Page.enable');await send('Page.addScriptToEvaluateOnNewDocument',{source:fixture});await send('Page.navigate',{url:APP_URL+'/roulette?mode='+mode});await sleep(1000);
  const click=txt=>ev(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>(b.textContent.trim()===${JSON.stringify(txt)}||b.getAttribute('aria-label')===${JSON.stringify(txt)}));if(!b||b.disabled)return false;b.click();return true})()`);
  const bet=()=>ev(`document.querySelector('button[title="Straight: 17"]').click()`);
  return{ws,send,ev,click,bet,errors};
