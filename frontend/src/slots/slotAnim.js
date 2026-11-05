@@ -122,6 +122,17 @@ export function lineCells(lineIndex, math = SLOT_MATH) {
 export function linePoints(lineIndex, math = SLOT_MATH, cell = 100) {
   return math.lines[lineIndex].map((row, reel) => `${reel * cell + cell / 2},${row * cell + cell / 2}`).join(' ');
 }
+// Smooth path through the centres of the first `count` cells of a line (only the winning part is drawn),
+// as cubic curves so the line flows between rows instead of zigzagging. 500 x 300 viewBox, cells of 100.
+export function linePath(lineIndex, count = 5, math = SLOT_MATH, cell = 100) {
+  const pts = math.lines[lineIndex].slice(0, Math.max(2, count)).map((row, reel) => [reel * cell + cell / 2, row * cell + cell / 2]);
+  let d = `M${pts[0][0]} ${pts[0][1]}`;
+  for (let i = 1; i < pts.length; i++) {
+    const [x0, y0] = pts[i - 1], [x1, y1] = pts[i], cx = (x0 + x1) / 2;
+    d += ` C${cx} ${y0} ${cx} ${y1} ${x1} ${y1}`;
+  }
+  return d;
+}
 // Cells that take part in a win of `count` symbols on `lineIndex` (left to right).
 export function winningCells(lineIndex, count, math = SLOT_MATH) {
   return lineCells(lineIndex, math).slice(0, count);

@@ -124,6 +124,7 @@ export default function SlotsApp() {
   const [reelStates, setReelStates] = useState(ALL_STOPPED);
   const [spinKey, setSpinKey] = useState(0);
   const [activeLine, setActiveLine] = useState(null);
+  const [activeCount, setActiveCount] = useState(5);
   const [winCells, setWinCells] = useState([]);
   const [dimming, setDimming] = useState(false);
   const [scatterHot, setScatterHot] = useState(false);
@@ -214,7 +215,7 @@ export default function SlotsApp() {
         case 'anticipation': setAnticipationFrom(step.fromReel); sfx.anticipation(true); break;
         case 'anticipation-end': setAnticipationFrom(null); sfx.anticipation(false); break;
         case 'line-win': {
-          setActiveLine(step.line); setWinCells(winningCells(step.line, step.count)); setDimming(true);
+          setActiveLine(step.line); setActiveCount(step.count); setWinCells(winningCells(step.line, step.count)); setDimming(true);
           sfx.lineWin(['win', 'nice', 'big', 'mega'].indexOf(step.tier));
           if (step.symbol === 'W') sfx.voice('gods_of_power');
           break;
@@ -407,7 +408,7 @@ export default function SlotsApp() {
               : banner?.kind === 'win' || banner?.kind === 'total' ? <span className="slot-last-win">{banner.kind === 'total' ? C.total : 'Win'} <b>{fmtMoney(banner.kind === 'total' ? banner.amount : winShown)}</b></span>
                 : <span className="slot-vault-title">{C.subtitle}</span>}
           </div>
-          <Reels grid={grid} stops={stops} reelStates={reelStates} spinKey={spinKey} activeLine={activeLine} winCells={winCells} dimming={dimming} scatterHot={scatterHot} anticipationFrom={anticipationFrom} onTap={skip} dust={mobile ? 8 : 16}>
+          <Reels grid={grid} stops={stops} reelStates={reelStates} spinKey={spinKey} activeLine={activeLine} activeCount={activeCount} winCells={winCells} dimming={dimming} scatterHot={scatterHot} anticipationFrom={anticipationFrom} onTap={skip} dust={mobile ? 8 : 16}>
             <AnimatePresence>
               {door && <motion.div key="door" className="slot-door" initial={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }} aria-hidden="true">
                 <div className="slot-door-leaf left" /><div className="slot-door-leaf right" />
