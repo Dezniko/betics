@@ -12,6 +12,11 @@
 //   fanfare()                 free spins banner
 //   retrigger()               extra free spins added
 //   countTick(progress)       win amount counting up (0 to 1)
+//   voice(name, {queue})      a recorded clip from /slots/voice/<name>.mp3 (optional file: missing = silent);
+//                             a new voice stops the one playing unless queue is true (then it follows it)
+//   portraitLand()            the Gods of Power portrait landed: gold impact hit + the POWER clip, at most once per 1.2 s
+//   ambientStart() / ambientStop()  very quiet low drone while the page is open (about -24 dBFS), stops when muted
+//   unlocked()                true when the audio engine exists and is not muted
 // Each cue returns nothing and never throws. When the audio engine is not unlocked yet, cues are skipped.
 //
 // Polyphony is bounded: at most MAX_LIVE source nodes may sound at the same instant; a cue that would
@@ -59,8 +64,10 @@ export function __liveCount(t) {
 export function __reset() {
   for (const v of live) { try { v.node.stop(); } catch { /* never started */ } }
   live.clear();
-  loop = null; riser = null; lastTickAt = -Infinity;
+  loop = null; riser = null; ambient = null; lastTickAt = -Infinity; lastPortraitAt = -Infinity;
+  current = null; queued = null; voiceCache.clear();
 }
+export const unlocked = () => !!engine();
 
 // Source factories return {node, voice} or null when the polyphony budget is full for that window.
 function osc(ctx, type, freq, start, end) {
@@ -194,7 +201,7 @@ export const spinLoopStart = safe(() => {
 export const spinLoopStop = safe(() => stopLoop(0.12));
 
 // ---- reel stop ------------------------------------------------------------------------------------
-export const reelStop = safe(index => {
+export const reelStop = safe((index, { sparkle = false } = {}) => {
   const e = engine(); if (!e) return;
   const ctx = e.context, now = ctx.currentTime, i = clamp(Math.round(index), 0, 4);
   const base = semis(95, i * 1.5);
@@ -215,6 +222,61 @@ export const reelStop = safe(index => {
     tick.node.connect(hp); hp.connect(g); g.connect(e.output);
     startVoice(tick);
   }
+  // Metallic click: a short noise burst through a resonant bandpass (the reel's latch).
+  const click = noise(ctx, 'white', now, now + 0.06);
+  if (click) {
+    const bp = filter(ctx, 'bandpass', 2600 + i * 180, 9, now);
+    const g = ctx.createGain(); env(g, now, 0.001, 0.055, 0.16);
+    click.node.connect(bp); bp.connect(g); g.connect(e.output);
+    startVoice(click);
+  }
+  // Sparkle when the reel shows a special symbol: three quick rising sine partials.
+  if (sparkle) {
+    [0, 0.045, 0.09].forEach((off, k) => {
+      const f = semis(1760, 7 * k + i);
+      const o = osc(ctx, 'sine', f, now + off, now + off + 0.22); if (!o) return;
+      const g = ctx.createGain(); env(g, now + off, 0.003, 0.21, 0.09);
+      o.node.connect(g); g.connect(e.output);
+      startVoice(o);
+    });
+  }
+});
+
+// ---- Gods of Power portrait: gold impact hit under the POWER clip, debounced ----------------------
+let lastPortraitAt = -Infinity;
+export const PORTRAIT_GAP = 1.2;
+export const portraitLand = safe(() => {
+  const e = engine(); if (!e) return;
+  const ctx = e.context, now = ctx.currentTime;
+  if (now - lastPortraitAt < PORTRAIT_GAP) return;
+  lastPortraitAt = now;
+  // Impact: sub drop plus a bright gold chord stab.
+  const sub = osc(ctx, 'sine', 160, now, now + 0.5);
+  if (sub) {
+    sub.node.frequency.exponentialRampToValueAtTime(52, now + 0.18);
+    const g = ctx.createGain(); env(g, now, 0.005, 0.45, 0.28);
+    sub.node.connect(g); g.connect(e.output);
+    startVoice(sub);
+  }
+  const lp = filter(ctx, 'lowpass', 900, 1.2, now);
+  lp.frequency.linearRampToValueAtTime(4200, now + 0.06);
+  lp.frequency.linearRampToValueAtTime(1200, now + 0.6);
+  const cg = ctx.createGain(); env(cg, now, 0.01, 0.5, 0.075, 0.1);
+  lp.connect(cg); cg.connect(e.output);
+  [0, 7, 12, 19].forEach((n, i) => {
+    const o = osc(ctx, 'sawtooth', semis(A4, n - 12), now, now + 0.62); if (!o) return;
+    o.node.detune.setValueAtTime(i % 2 ? 7 : -7, now);
+    o.node.connect(lp);
+    startVoice(o);
+  });
+  const shimmer = noise(ctx, 'white', now, now + 0.3);
+  if (shimmer) {
+    const hp = filter(ctx, 'highpass', 5000, 0.8, now);
+    const g = ctx.createGain(); env(g, now, 0.002, 0.28, 0.08);
+    shimmer.node.connect(hp); hp.connect(g); g.connect(e.output);
+    startVoice(shimmer);
+  }
+  voice('power');
 });
 
 // ---- anticipation riser ---------------------------------------------------------------------------
@@ -227,8 +289,25 @@ function stopRiser(fade) {
   fadeTo0(gain, now, end);
   stopVoices(voices, end + 0.01);
 }
+function anticipationHit(e) {
+  // The tension resolves in a bright hit: a cymbal-like noise splash and a high chime.
+  const ctx = e.context, now = ctx.currentTime;
+  const splash = noise(ctx, 'white', now, now + 0.5);
+  if (splash) {
+    const hp = filter(ctx, 'highpass', 3200, 0.7, now);
+    const g = ctx.createGain(); env(g, now, 0.003, 0.48, 0.14);
+    splash.node.connect(hp); hp.connect(g); g.connect(e.output);
+    startVoice(splash);
+  }
+  [semis(A4, 24), semis(A4, 31)].forEach((f, i) => {
+    const o = osc(ctx, 'sine', f, now, now + 0.6); if (!o) return;
+    const g = ctx.createGain(); env(g, now, 0.004, 0.59, 0.14 - i * 0.05);
+    o.node.connect(g); g.connect(e.output);
+    startVoice(o);
+  });
+}
 export const anticipation = safe(on => {
-  if (!on) { stopRiser(0.25); return; }
+  if (!on) { const had = !!riser; stopRiser(0.25); if (had) { const e = engine(); if (e) anticipationHit(e); } return; }
   if (riser) return;
   const e = engine(); if (!e) return;
   const ctx = e.context, now = ctx.currentTime;
@@ -247,6 +326,17 @@ export const anticipation = safe(on => {
     const depth = gainAt(ctx, 0.08, now);
     lfo.node.connect(depth); depth.connect(trem.gain);
     voices.push(lfo);
+  }
+  // Tick tick tick: the click loop, accelerating, through a bright bandpass.
+  const ticks = noise(ctx, 'clicks', now, Infinity, true);
+  if (ticks) {
+    ticks.node.playbackRate.setValueAtTime(0.5, now);
+    ticks.node.playbackRate.linearRampToValueAtTime(1.6, now + 4);
+    const bp = filter(ctx, 'bandpass', 3200, 4, now);
+    bp.frequency.linearRampToValueAtTime(5200, now + 4);
+    const tg = gainAt(ctx, 0.3, now);
+    ticks.node.connect(bp); bp.connect(tg); tg.connect(gain);
+    voices.push(ticks);
   }
   riser = { ctx, voices: voices.map(v => v.voice), gain };
   for (const v of voices) startVoice(v);
@@ -280,10 +370,10 @@ export const scatter = safe(count => {
 // ---- line win jingle --------------------------------------------------------------------------------
 const A4 = 440;
 const TIERS = [
-  { notes: [0, 4, 7], gap: 0.08, note: 0.25, chord: null, shimmer: false, peak: 0.16 },
-  { notes: [0, 4, 7, 12, 16], gap: 0.085, note: 0.3, chord: null, shimmer: false, peak: 0.16 },
-  { notes: [0, 4, 7, 12, 16, 19], gap: 0.09, note: 0.34, chord: [0, 4, 7], shimmer: false, peak: 0.15 },
-  { notes: [0, 4, 7, 12, 16, 19, 24, 28, 31], gap: 0.1, note: 0.4, chord: [-12, 0, 4, 7, 12], shimmer: true, peak: 0.14 },
+  { notes: [0, 4, 7], gap: 0.08, note: 0.25, chord: null, shimmer: false, glitter: 0, peak: 0.16 },
+  { notes: [0, 4, 7, 12, 16], gap: 0.085, note: 0.3, chord: [0, 4, 7], shimmer: false, glitter: 4, peak: 0.15 },
+  { notes: [0, 4, 7, 12, 16, 19], gap: 0.09, note: 0.34, chord: [-12, 0, 4, 7], shimmer: true, glitter: 6, peak: 0.14 },
+  { notes: [0, 4, 7, 12, 16, 19, 24, 28, 31], gap: 0.1, note: 0.4, chord: [-12, 0, 4, 7, 12], shimmer: true, glitter: 9, peak: 0.13 },
 ];
 export const lineWin = safe(tier => {
   const e = engine(); if (!e) return;
@@ -306,7 +396,7 @@ export const lineWin = safe(tier => {
   });
   const chordAt = now + t.notes.length * t.gap;
   if (t.chord) {
-    const hold = t.shimmer ? 1.6 - t.notes.length * t.gap : 0.6;
+    const hold = t.shimmer ? 1.6 - t.notes.length * t.gap : 0.5;
     const lp = filter(ctx, 'lowpass', 700, 1, chordAt);
     lp.frequency.linearRampToValueAtTime(3200, chordAt + 0.12);
     lp.frequency.linearRampToValueAtTime(900, chordAt + hold);
@@ -329,6 +419,14 @@ export const lineWin = safe(tier => {
       startVoice(s);
     });
   }
+  // Glitter: tiny high sine pings scattered over the arpeggio.
+  for (let k = 0; k < t.glitter; k++) {
+    const at = now + 0.05 + (k / Math.max(1, t.glitter)) * (t.notes.length * t.gap + 0.4), f = semis(A4, 31 + ((k * 5) % 12));
+    const o = osc(ctx, 'sine', f, at, at + 0.12); if (!o) break;
+    const g = ctx.createGain(); env(g, at, 0.002, 0.118, 0.05);
+    o.node.connect(g); g.connect(e.output);
+    startVoice(o);
+  }
 });
 
 // ---- coin shower ---------------------------------------------------------------------------------------
@@ -348,10 +446,11 @@ export const coinShower = safe(durationMs => {
       startVoice(n);
       return;
     }
-    const f = 2400 + Math.random() * 3600;
-    const o = osc(ctx, 'triangle', f, at, at + len); if (!o) return;
+    const low = i % 7 === 5; // every so often a heavier coin lands
+    const f = low ? 1100 + Math.random() * 500 : 2400 + Math.random() * 3600;
+    const o = osc(ctx, low ? 'square' : 'triangle', f, at, at + len * (low ? 1.6 : 1)); if (!o) return;
     o.node.frequency.exponentialRampToValueAtTime(f * 0.94, at + len);
-    const g = ctx.createGain(); env(g, at, 0.002, len - 0.002, 0.13);
+    const g = ctx.createGain(); env(g, at, 0.002, len * (low ? 1.6 : 1) - 0.002, low ? 0.07 : 0.13);
     o.node.connect(g); g.connect(e.output);
     startVoice(o);
   });
@@ -390,6 +489,13 @@ export const vaultOpen = safe(() => {
     const g = ctx.createGain(); env(g, boomAt, 0.004, 0.24, 0.2);
     thud.node.connect(lp); lp.connect(g); g.connect(e.output); g.connect(send);
     startVoice(thud);
+  }
+  // Sub layer: a slow 38 Hz swell under the boom, felt more than heard.
+  const sub = osc(ctx, 'sine', 38, boomAt, boomAt + 1.3);
+  if (sub) {
+    const g = ctx.createGain(); env(g, boomAt, 0.03, 1.0, 0.18, 0.25);
+    sub.node.connect(g); g.connect(e.output);
+    startVoice(sub);
   }
 });
 
@@ -444,11 +550,118 @@ export const countTick = safe(progress => {
   startVoice(o);
 });
 
-// Mute or volume 0: nothing new is scheduled (engine() returns null) and the loops stop at once.
+// ---- ambient bed ----------------------------------------------------------------------------------------------
+// Two detuned low tones and a slow filtered pink wash, peaking around -24 dBFS: felt as room tone, not music.
+export const AMBIENT_PEAK = 0.06;
+let ambient = null;
+function stopAmbient(fade) {
+  if (!ambient) return;
+  const { ctx, voices, gain } = ambient;
+  ambient = null;
+  const now = ctx.currentTime, end = now + fade;
+  fadeTo0(gain, now, end);
+  stopVoices(voices, end + 0.01);
+}
+export const ambientStart = safe(() => {
+  if (ambient) return;
+  const e = engine(); if (!e) return;
+  const ctx = e.context, now = ctx.currentTime, voices = [];
+  const gain = gainAt(ctx, 0, now);
+  gain.gain.linearRampToValueAtTime(1, now + 2.5);
+  gain.connect(e.output);
+  const lp = filter(ctx, 'lowpass', 180, 0.7, now);
+  lp.connect(gain);
+  [[55, -4], [82.41, 5]].forEach(([f, det]) => {
+    const o = osc(ctx, 'triangle', f, now, Infinity); if (!o) return;
+    o.node.detune.setValueAtTime(det, now);
+    const g = gainAt(ctx, AMBIENT_PEAK * 0.35, now);
+    o.node.connect(g); g.connect(lp);
+    voices.push(o);
+  });
+  const wash = noise(ctx, 'pink', now, Infinity, true);
+  if (wash) {
+    const bp = filter(ctx, 'bandpass', 420, 0.9, now);
+    const wg = gainAt(ctx, AMBIENT_PEAK * 0.3, now);
+    wash.node.connect(bp); bp.connect(wg); wg.connect(gain);
+    voices.push(wash);
+    const lfo = osc(ctx, 'sine', 0.07, now, Infinity);
+    if (lfo) { const depth = gainAt(ctx, 160, now); lfo.node.connect(depth); depth.connect(bp.frequency); voices.push(lfo); }
+  }
+  if (!voices.length) return;
+  ambient = { ctx, voices: voices.map(v => v.voice), gain };
+  for (const v of voices) startVoice(v);
+});
+export const ambientStop = safe(() => stopAmbient(0.6));
+
+// ---- recorded voice clips ------------------------------------------------------------------------------------------
+// Clips are optional: a missing or undecodable file is remembered as null and never fetched again.
+export const VOICE_DIR = '/slots/voice/';
+export const VOICE_GAIN = 0.9;
+const voiceCache = new Map(); // name -> Promise<AudioBuffer | null>
+let voiceLoader = defaultVoiceLoader;
+async function defaultVoiceLoader(name, ctx) {
+  const r = await fetch(`${VOICE_DIR}${name}.mp3`);
+  if (!r.ok || !/audio|octet/.test(r.headers.get('content-type') || 'audio')) return null;
+  return ctx.decodeAudioData(await r.arrayBuffer());
+}
+// Test hook: inject a loader (name, ctx) => Promise<buffer | null>. Passing nothing restores fetch + decode.
+export function __setVoiceLoader(fn) { voiceLoader = typeof fn === 'function' ? fn : defaultVoiceLoader; voiceCache.clear(); }
+function loadVoice(name, ctx) {
+  if (!voiceCache.has(name)) {
+    voiceCache.set(name, Promise.resolve().then(() => voiceLoader(name, ctx)).then(b => (b && b.duration > 0 ? b : null)).catch(() => null));
+  }
+  return voiceCache.get(name);
+}
+let current = null; // { voice, node, name } playing now
+let queued = null;  // name waiting for the current clip to end
+let voiceSeq = 0;
+function stopCurrentVoice() {
+  if (!current) return;
+  const { voice, node } = current;
+  current = null;
+  try { voice.end = voice.ctx.currentTime; node.stop(); } catch { /* already finished */ }
+}
+function playVoiceBuffer(e, name, buffer) {
+  const ctx = e.context, now = ctx.currentTime, end = now + buffer.duration;
+  if (!roomFor(ctx, now, end)) return;
+  const node = ctx.createBufferSource();
+  node.buffer = buffer;
+  const g = gainAt(ctx, VOICE_GAIN, now);
+  node.connect(g); g.connect(e.output);
+  const voice = track(node, now, end);
+  voice.ctx = ctx;
+  current = { voice, node, name };
+  node.onended = () => {
+    live.delete(voice);
+    if (current && current.node === node) current = null;
+    if (queued) { const next = queued; queued = null; voice_(next); }
+  };
+  node.start(now);
+}
+function voice_(name, { queue = false } = {}) {
+  if (typeof name !== 'string' || !/^[a-z0-9_]+$/i.test(name)) return;
+  const e = engine(); if (!e) return;
+  if (queue && current) { queued = name; return; }
+  const seq = ++voiceSeq;
+  stopCurrentVoice(); queued = null;
+  loadVoice(name, e.context).then(buffer => {
+    if (!buffer || seq !== voiceSeq) return; // a newer voice took over while this one loaded
+    const live_ = engine(); if (!live_) return;
+    stopCurrentVoice();
+    playVoiceBuffer(live_, name, buffer);
+  });
+}
+export const voice = safe((name, opts) => voice_(name, opts));
+// Test and QA hook: the name of the clip playing now, or null.
+export const __currentVoice = () => (current ? current.name : null);
+
+// Mute or volume 0: nothing new is scheduled (engine() returns null) and everything running stops at once.
 try {
   subscribeAudioSettings(() => {
     if (effectiveVolume() !== 0) return;
     stopLoop(0.005);
     stopRiser(0.005);
+    stopAmbient(0.005);
+    stopCurrentVoice(); queued = null;
   });
 } catch { /* Settings module unavailable: cues simply follow the engine getter. */ }

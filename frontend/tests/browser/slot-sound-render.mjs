@@ -42,8 +42,13 @@ const CUES = {
   fanfare: { len: 2.3, run: 'm.fanfare();' },
   retrigger: { len: 0.7, run: 'm.retrigger();' },
   countTicks: { len: 1.2, run: 'for (let i = 0; i < 40; i++) schedule(i * 0.025, () => m.countTick(i / 40));' },
+  reelStopSparkle: { len: 0.7, run: 'm.reelStop(2, { sparkle: true });' },
+  anticipationHit: { len: 2.6, run: 'm.anticipation(true); schedule(1.9, () => m.anticipation(false));' },
+  portraitLand: { len: 1.2, run: 'm.portraitLand();' }, // the POWER clip itself cannot be fetched here: only the gold hit renders
+  ambient: { len: 3.2, run: 'm.ambientStart(); schedule(2.6, () => m.ambientStop());', maxDbfs: -20 },
   // Worst case mix the polyphony cap and the gain budget must survive.
   comboMegaWin: { len: 2.6, run: 'm.lineWin(3); m.coinShower(2000); m.fanfare(); schedule(0.3, () => m.vaultOpen());' },
+  comboPortraitStops: { len: 1.6, run: 'm.spinLoopStart(); m.reelStop(3, { sparkle: true }); m.portraitLand(); schedule(0.22, () => { m.reelStop(4, { sparkle: true }); m.spinLoopStop(); m.anticipation(false); }); schedule(0.5, () => m.lineWin(2));' },
 };
 
 const mime = { '.js': 'text/javascript', '.mjs': 'text/javascript', '.html': 'text/html' };
@@ -127,7 +132,7 @@ async function main() {
       const file = path.join(outDir, `${name}.wav`);
       await writeFile(file, Buffer.from(wav, 'base64'));
       const dbfs = peak > 0 ? 20 * Math.log10(peak) : -Infinity;
-      rows.push({ name, duration, peak, dbfs });
+      rows.push({ name, duration, peak, dbfs, maxDbfs: cue.maxDbfs ?? -1 });
       console.log(`${name.padEnd(14)} ${duration.toFixed(2).padStart(5)} s  peak ${dbfs.toFixed(1).padStart(6)} dBFS`);
     }
     cdp.close();
@@ -136,11 +141,11 @@ async function main() {
     try { process.kill(-chrome.pid); } catch { /* already gone */ }
     try { execSync(`pkill -f remote-debugging-port=${PORT}`); } catch { /* none left */ }
   }
-  const loud = rows.filter(r => r.dbfs >= -1);
+  const loud = rows.filter(r => r.dbfs >= r.maxDbfs);
   const silent = rows.filter(r => r.peak === 0);
   console.log(`\n${rows.length} renders in ${outDir}`);
   if (silent.length) console.log(`SILENT: ${silent.map(r => r.name).join(', ')}`);
-  if (loud.length) console.log(`TOO LOUD (>= -1 dBFS): ${loud.map(r => `${r.name} ${r.dbfs.toFixed(1)}`).join(', ')}`);
+  if (loud.length) console.log(`TOO LOUD: ${loud.map(r => `${r.name} ${r.dbfs.toFixed(1)} (limit ${r.maxDbfs})`).join(', ')}`);
   process.exit(loud.length || silent.length ? 1 : 0);
 }
 

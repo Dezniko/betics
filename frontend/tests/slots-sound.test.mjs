@@ -178,11 +178,12 @@ test('countTick is rate limited to about 20 per second and rises in pitch with p
 
 test('reel stops rise in pitch per reel and scatters rise a fifth per count', () => {
   const ctx = withEngine(fakeContext());
-  const thunk = i => { const n = ctx.sources.length; sound.reelStop(i); return ctx.sources.slice(n).find(s => s.type === 'triangle').frequency.calls.find(c => c[0] === 'exponentialRampToValueAtTime')[1]; };
+  // Reels stop 220 ms apart in play, so the clock moves between calls (all at once would hit the polyphony cap).
+  const thunk = i => { ctx.currentTime = i * 0.22; const n = ctx.sources.length; sound.reelStop(i); return ctx.sources.slice(n).find(s => s.type === 'triangle').frequency.calls.find(c => c[0] === 'exponentialRampToValueAtTime')[1]; };
   const pitches = [0, 1, 2, 3, 4].map(thunk);
   for (let i = 1; i < 5; i++) assert.ok(pitches[i] > pitches[i - 1]);
   assert.ok(pitches[0] >= 90 && pitches[4] <= 140, `thunks between 90 and 140 Hz: ${pitches}`);
-  const bell = n => { const k = ctx.sources.length; sound.scatter(n); return ctx.sources.slice(k)[0].frequency.calls[0][1]; };
+  const bell = n => { ctx.currentTime = 2 + n * 0.22; const k = ctx.sources.length; sound.scatter(n); return ctx.sources.slice(k)[0].frequency.calls[0][1]; };
   const bells = [1, 2, 3, 4, 5].map(bell);
   for (let i = 1; i < 5; i++) assert.ok(Math.abs(bells[i] / bells[i - 1] - 1.5) < 1e-9, 'a fifth up per scatter');
 });
@@ -198,4 +199,128 @@ test('line win tiers grow longer and busier', () => {
   assert.ok(Math.abs(ends[0].end - 0.41) < 0.01, `tier 0 ends ~0.4 s: ${ends[0].end}`);
   for (let i = 1; i < 4; i++) { assert.ok(ends[i].count > ends[i - 1].count); assert.ok(ends[i].end > ends[i - 1].end); }
   assert.ok(ends[3].end >= 1.5 && ends[3].end <= 2.2, `mega ~1.6 s or more: ${ends[3].end}`);
+});
+
+// ---- voice clips, the portrait hit and the ambient bed -----------------------------------------------------
+const tick = () => new Promise(r => setTimeout(r, 0));
+const fakeBuffer = (duration) => ({ duration, fake: true });
+function voiceLoader(available) {
+  const calls = [];
+  sound.__setVoiceLoader(async (name) => { calls.push(name); return available[name] ? fakeBuffer(available[name]) : null; });
+  return calls;
+}
+
+test('voice plays a decoded clip through the master, a new voice stops the old one, queue waits', async () => {
+  const ctx = withEngine(fakeContext());
+  const calls = voiceLoader({ power: 0.8, big_win: 1.4, welcome: 2 });
+  sound.voice('power'); await tick(); await tick();
+  const clips = () => ctx.sources.filter(s => s.kind === 'buffer' && s.buffer?.fake);
+  assert.equal(clips().length, 1);
+  assert.equal(clips()[0].started, 0);
+  assert.ok(reaches(clips()[0], ctx.output), 'voice reaches the master output');
+  assert.equal(sound.__currentVoice(), 'power');
+  // A second voice stops the first at once.
+  ctx.currentTime = 0.3;
+  sound.voice('big_win'); await tick(); await tick();
+  assert.equal(clips().length, 2);
+  assert.equal(clips()[0].stopped, 0.3, 'the previous clip is stopped when the next one starts');
+  assert.equal(sound.__currentVoice(), 'big_win');
+  // Queue: the welcome waits until big_win ends, then plays.
+  sound.voice('welcome', { queue: true }); await tick(); await tick();
+  assert.equal(clips().length, 2, 'queued clip has not started yet');
+  ctx.currentTime = 1.7; clips()[1].onended();
+  await tick(); await tick();
+  assert.equal(clips().length, 3);
+  assert.equal(sound.__currentVoice(), 'welcome');
+  assert.deepEqual(calls, ['power', 'big_win', 'welcome'], 'each clip is fetched once');
+  sound.voice('power'); await tick(); await tick();
+  assert.deepEqual(calls, ['power', 'big_win', 'welcome'], 'cached: no second fetch');
+  sound.__setVoiceLoader();
+});
+
+test('a missing voice clip is silent, never throws and is not fetched again; muted plays nothing', async () => {
+  const ctx = withEngine(fakeContext());
+  const calls = voiceLoader({});
+  for (let i = 0; i < 3; i++) { assert.doesNotThrow(() => sound.voice('nice_win')); await tick(); await tick(); }
+  assert.deepEqual(calls, ['nice_win'], 'one attempt only');
+  assert.equal(ctx.sources.filter(s => s.kind === 'buffer' && s.buffer?.fake).length, 0);
+  assert.equal(sound.__currentVoice(), null);
+  assert.doesNotThrow(() => { sound.voice(''); sound.voice('../x'); sound.voice(42); sound.voice(null); });
+  sound.__setVoiceLoader(() => { throw Error('decode failed'); });
+  assert.doesNotThrow(() => sound.voice('welcome')); await tick(); await tick();
+  assert.equal(sound.__currentVoice(), null);
+  // Muted: no fetch, nothing plays, and a playing clip stops.
+  voiceLoader({ power: 1 });
+  sound.voice('power'); await tick(); await tick();
+  assert.equal(sound.__currentVoice(), 'power');
+  settings.setAudioSettings({ muted: true });
+  assert.equal(sound.__currentVoice(), null, 'mute stops the clip');
+  const before = ctx.sources.length;
+  sound.voice('power'); await tick(); await tick();
+  assert.equal(ctx.sources.length, before);
+  settings.setAudioSettings({ muted: false, volume: 1 });
+  sound.__setVoiceLoader();
+});
+
+test('portraitLand plays a gold hit plus the POWER clip, at most once per 1.2 s', async () => {
+  const ctx = withEngine(fakeContext());
+  voiceLoader({ power: 0.7 });
+  sound.portraitLand(); await tick(); await tick();
+  const started = ctx.sources.filter(s => s.started !== null);
+  assert.ok(started.length >= 4, 'impact layers scheduled');
+  assert.ok(started.some(s => s.kind === 'buffer' && s.buffer?.fake), 'the POWER clip plays');
+  assert.ok(started.every(s => reaches(s, ctx.output)));
+  const n = ctx.sources.length;
+  ctx.currentTime = 0.22; sound.portraitLand(); await tick(); await tick();
+  ctx.currentTime = 0.9; sound.portraitLand(); await tick(); await tick();
+  assert.equal(ctx.sources.length, n, 'debounced: nothing new inside 1.2 s');
+  ctx.currentTime = 1.3; sound.portraitLand(); await tick(); await tick();
+  assert.ok(ctx.sources.length > n, 'plays again after the gap');
+  sound.__setVoiceLoader();
+});
+
+test('ambient bed: quiet looping drone, no duplicate start, fades on stop and stops on mute', () => {
+  const ctx = withEngine(fakeContext());
+  sound.ambientStart();
+  const voices = ctx.sources.filter(s => s.started !== null);
+  assert.ok(voices.length >= 3, 'tones and a wash');
+  assert.ok(voices.every(s => s.stopped === null), 'the bed loops until stopped');
+  assert.ok(voices.filter(s => !(s.kind === 'oscillator' && s.frequency.value < 20)).every(s => reaches(s, ctx.output)), 'tones and wash reach the master (the LFO drives a filter)');
+  // Every source gain sits at or under the ambient budget (about -24 dBFS).
+  const quiet = ctx.nodes.filter(x => x.kind === 'gain' && x.gain.value > 0 && x.gain.value <= sound.AMBIENT_PEAK * 0.35 + 1e-9);
+  assert.ok(quiet.length >= 2, 'source gains sit under the ambient peak');
+  assert.ok(sound.AMBIENT_PEAK <= 0.0631, 'ambient budget is -24 dBFS or less');
+  const n = ctx.sources.length;
+  sound.ambientStart();
+  assert.equal(ctx.sources.length, n, 'no duplicate bed');
+  ctx.currentTime = 5;
+  sound.ambientStop();
+  for (const s of voices) assert.ok(s.stopped !== null && s.stopped > 5.5 && s.stopped < 5.7, `fades over ~0.6 s: ${s.stopped}`);
+  assert.doesNotThrow(() => sound.ambientStop());
+  sound.ambientStart();
+  const again = ctx.sources.filter(s => s.started === 5);
+  assert.ok(again.length >= 3);
+  settings.setAudioSettings({ muted: true });
+  for (const s of again) assert.ok(s.stopped !== null && s.stopped <= 5.02, 'mute stops the bed at once');
+  settings.setAudioSettings({ muted: false, volume: 1 });
+  assert.equal(sound.unlocked(), true);
+  withEngine(null);
+  assert.equal(sound.unlocked(), false);
+});
+
+test('anticipation ends in a bright hit; reel stops on special symbols add a sparkle', () => {
+  const ctx = withEngine(fakeContext());
+  sound.anticipation(true);
+  const ticks = ctx.sources.filter(s => s.kind === 'buffer' && s.loop && s.playbackRate.calls.length);
+  assert.ok(ticks.length >= 1, 'the tick loop accelerates');
+  ctx.currentTime = 3;
+  const n = ctx.sources.length;
+  sound.anticipation(false);
+  assert.ok(ctx.sources.length > n, 'a hit is scheduled when the tension resolves');
+  assert.equal(ctx.sources.length, (sound.anticipation(false), ctx.sources.length), 'no hit without a riser');
+  ctx.currentTime = 10;
+  const plain = ctx.sources.length; sound.reelStop(1); const plainCount = ctx.sources.length - plain;
+  ctx.currentTime = 11;
+  const special = ctx.sources.length; sound.reelStop(1, { sparkle: true }); const sparkleCount = ctx.sources.length - special;
+  assert.ok(sparkleCount > plainCount, `sparkle adds voices (${plainCount} vs ${sparkleCount})`);
 });
