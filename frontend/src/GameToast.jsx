@@ -37,6 +37,7 @@ export default function GameToast({ toasts, onDismiss }) {
         <div className="game-toast-text">
           <strong>{t.title}</strong>
           <span className="game-toast-message">{t.text}</span>
+          {t.action && <button type="button" className="game-toast-action" data-testid={t.action.testid} onClick={t.action.onClick}>{t.action.label}</button>}
         </div>
         {t.dismissible && <button type="button" className="game-toast-close" aria-label="Dismiss" onClick={() => onDismiss(t.kind)}>
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>

@@ -19,14 +19,16 @@ import SupportLink from './Support.jsx';
 import { AgeGate } from './Terms.jsx';
 import ConnectNotice from './ConnectNotice.jsx';
 import BrandLogo from './BrandLogo.jsx';
+import LobbyLink from './LobbyLink.jsx';
 import { needsConnectNotice, acceptConnectNotice } from './connectNotice.js';
-import { walletApi, resolveMode, modeBalance, balanceField, shortAddress, STORAGE, DEPOSIT_FINAL, restoreSavedDeposit, saveDepositFor, clearDepositFor } from './walletApi.js';
+import { walletApi, resolveMode, modeBalance, balanceField, shortAddress, STORAGE, DEPOSIT_FINAL, restoreSavedDeposit, saveDepositFor, clearDepositFor, isSignedInElsewhere } from './walletApi.js';
+import { usePlayGuard, PlayCover } from './PlayGuard.jsx';
 import { topUpState, DEPOSIT_PAUSED_MESSAGE, DEPOSITS_CLOSED_MESSAGE, OFFICIAL_TICS, CASINO_WALLET, CHAIN_ID } from './depositTarget.js';
 import { classifySpinRefusal, budgetFor, recordRefusal, refusalStopMessage, refusalRetiredMessage, rememberOpenLock, updateOpenLock, forgetOpenLock, findOpenLock, mustRetireLock, locksToCheck, findRoundForLock,
   addRefusedSpin, readRefusedLog, canAcceptReloadedLock, isBalanceResync, OPEN_LOCK_GRACE_MS, REFUSAL_NO_LOCK_MESSAGE, SIGN_IN_EXPIRED_MESSAGE, TABLE_CHANGED_MESSAGE, LOST_REPLY_MESSAGE,
   LOST_REPLY_PAUSED_MESSAGE, OTHER_DEVICE_MESSAGE, OTHER_DEVICE_ALONE_MESSAGE, OWN_ROUND_SWAPPED_MESSAGE, STALE_LOCK_MESSAGE, NEVER_OPENED_MESSAGE, ownRoundProblems, wouldHaveWon, wouldHaveText,
-  BALANCE_RESYNC_MESSAGE, shortCreditMessage, postJsonWithTimeout, checkRefusalAgainstKnown } from './spinRefusal.js';
-import { startPresence, otherTabRecently } from './tabPresence.js';
+  BALANCE_RESYNC_MESSAGE, shortCreditMessage, postJsonWithTimeout, checkRefusalAgainstKnown, OTHER_TAB_MESSAGE } from './spinRefusal.js';
+import { startPresence, otherTabRecently, tabIdFor } from './tabPresence.js';
 import WinCelebration from './WinCelebration.jsx';
 import FairnessSheet, { FairFlow, RefusedSpins } from './FairnessSheet.jsx';
 import { chefLockUrl } from './fairnessLinks.js';
@@ -149,9 +151,11 @@ export default function App() {
     const d = p?.address ? restoreSavedDeposit(local(), p.address) : null;
     setDeposit(d ? { txHash: d.txHash, address: p.address, status: 'pending', confirmations: 0, required: p.confirmations } : null);
   };
+  const [elsewhere, setElsewhere] = useState(null); // server text after this wallet signed in from another browser
   useEffect(() => {
     (async () => {
-      const p = await walletApi.me().catch(() => null);
+      let p = null;
+      try { p = await walletApi.me(); } catch (e) { if (isSignedInElsewhere(e)) { setElsewhere(e.message); p = null; } }
       setProfile(p);
       await loadSession(p?.address || 'guest');
       // Only a well-formed tx hash for this wallet is tracked.
@@ -179,7 +183,10 @@ export default function App() {
 
   // This tab's heartbeat, so a lock "used by another tab" can be checked against the tabs really open.
   const presenceRef = useRef(null);
+  const [tabId] = useState(() => { try { return tabIdFor(); } catch { return null; } }); // the same id startPresence keeps
   useEffect(() => { const p = startPresence(); presenceRef.current = p; return () => p.stop(); }, []);
+  // One tab at a time: this tab announces its spins; another tab's spin covers the felt for 8 s.
+  const guard = usePlayGuard({ game: 'roulette', tabId });
 
   const stopForVerification = (message) => {
     // Tell the operator: fairness failures raise an alert in the admin panel.
@@ -521,8 +528,25 @@ export default function App() {
     pendingRefreshRef.current = false;
     try { const w = await walletApi.wallet(); walletAtRef.current = Date.now(); setUser((u) => (u ? { ...u, ...w } : u)); } catch { /* keep the last known */ }
   }, []);
-  const refreshProfile = useCallback(async () => { const p = await walletApi.me().catch(() => null); if (p) setProfile(p); }, []);
+  const switchIdentityRef = useRef(null);
+  // The wallet signed in from another browser: the server closed this session. Auto stops, the page goes back to Demo.
+  const signedOutElsewhere = useCallback(async (e) => {
+    setElsewhere(e?.message || 'You connected this wallet in another browser or device. Connect again to play here.');
+    setWalletOpen(false); setDeposit(null);
+    await switchIdentityRef.current?.(null).catch(() => {});
+  }, []);
+  const refreshProfile = useCallback(async () => {
+    try { const p = await walletApi.me(); if (p) setProfile(p); }
+    catch (e) { if (isSignedInElsewhere(e)) await signedOutElsewhere(e); }
+  }, [signedOutElsewhere]);
   useEffect(() => { if (!busy && !autoSpin && pendingRefreshRef.current) refreshWallet(); }, [busy, autoSpin, refreshWallet]);
+  // Poll the profile while connected, so a session closed elsewhere is noticed within about 15 s.
+  const connected = !!profile?.address;
+  useEffect(() => {
+    if (!connected) return undefined;
+    const t = setInterval(() => { refreshProfile(); }, 10000);
+    return () => clearInterval(t);
+  }, [connected, refreshProfile]);
   // Changing mode (or being moved to Real by a top up) clears the table: chips belong to one balance.
   const lastModeRef = useRef(mode);
   useEffect(() => {
@@ -545,9 +569,10 @@ export default function App() {
     setProfile(p);
     await loadSession(p?.address || 'guest');
   };
+  switchIdentityRef.current = switchIdentity;
   const connectWallet = async () => {
     if (walletBusy || busy || autoSpin) return;
-    setWalletBusy(true); setError(null);
+    setWalletBusy(true); setError(null); setElsewhere(null);
     try {
       const w = await loadWalletModule();
       const p = await w.signIn();
@@ -1070,7 +1095,15 @@ export default function App() {
   // Predicted refusals count in the larger budget, unpredicted ones in the strict one.
   // checked: the page's own balance and limits said this bet was allowed, so a "predicted" refusal was
   // counted as unexpected instead.
-  const handleRefusal = async ({ kind, reason, entry, request, bodyText, checked = false }) => {
+  const handleRefusal = async ({ kind, reason, code = null, entry, request, bodyText, checked = false }) => {
+    if (kind === 'other_tab') {
+      // Refused before anything was read: nothing consumed, the lock is still ours and not counted.
+      forgetOpenLock(entry.serverSeedHash);
+      endSpinWithoutResult();
+      setNotice(reason || OTHER_TAB_MESSAGE);
+      return;
+    }
+    if (kind === 'auth' && isSignedInElsewhere({ status: 401, code })) { forgetOpenLock(entry.serverSeedHash); endSpinWithoutResult(); await signedOutElsewhere({ message: reason }); return; }
     updateOpenLock(entry.serverSeedHash, { refused: true, counted: !budgetFor(kind) });
     if (kind === 'stale_lock') {
       // The lock moved on. If a round used it, it was either this very spin or another tab/device.
@@ -1171,6 +1204,7 @@ export default function App() {
       // mathId: the payout table the player confirmed. A changed table is refused before anything is used.
       const bodyText = JSON.stringify({ ...request.body, mode, ...(mathId ? { mathId } : {}) });
       sent = true; // from here the server has seen this lock's random value
+      guard.announce();
       // Timed out after SPIN_TIMEOUT_MS: handled as a lost reply, the lock stays in the open locks list.
       const { resp, data } = await postJsonWithTimeout(`${API}/games/roulette/spin`, bodyText);
       if (!resp || (resp.ok && !data)) { // no usable reply: a network blip, not a fairness alert
@@ -1189,7 +1223,7 @@ export default function App() {
           try { known.balance = modeBalance(await walletApi.wallet(), mode); } catch { known.balance = null; }
         }
         const kind = checkRefusalAgainstKnown(first, resp.status, reason, known);
-        await handleRefusal({ kind, reason, entry, request, bodyText, checked: kind !== first });
+        await handleRefusal({ kind, reason, code: data?.code, entry, request, bodyText, checked: kind !== first });
         return;
       }
       await processSpinReply(data, request, entry);
@@ -1356,7 +1390,9 @@ export default function App() {
             </span>
             <svg className="commitment-chevron" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
           </button>
-          <SoundQuickControls onOpen={() => setSoundSettingsOpen(true)}><Inbox ready={!!user} quiet={busy || autoSpin} /></SoundQuickControls>
+          <SoundQuickControls onOpen={() => setSoundSettingsOpen(true)}>{!portraitPhone && <LobbyLink />}<Inbox ready={!!user} quiet={busy || autoSpin} /></SoundQuickControls>
+          {/* Portrait phones: the toolbar row has no room (the pill would squeeze the logo), so the Lobby pill gets its own short row. */}
+          {portraitPhone && <LobbyLink className="lobby-link-row" />}
         </div>
         <div className="header-right">
           <div className={`header-balance ${landscape ? 'flex items-baseline gap-2 text-right' : 'text-right'}`}>
@@ -1388,9 +1424,10 @@ export default function App() {
             </button>
           )}
         </div>
-        <GameToast onDismiss={(kind) => { if (kind === 'error') setError(null); if (kind === 'info') setNotice(null); }} toasts={[
+        <GameToast onDismiss={(kind) => { if (kind === 'error') setError(null); if (kind === 'info') setNotice(null); if (kind === 'elsewhere') setElsewhere(null); }} toasts={[
           gameClosed && { kind: 'closed', className: 'game-notice', testid: 'game-closed', title: toastTitle('closed'), text: gameConfig.maintenanceMessage || 'This game is having a short break. Please check back soon.' },
           !gameClosed && tableInvalid && { kind: 'closed', className: 'game-error', testid: 'payout-table-invalid', title: 'Betting paused', text: 'The payout table from the server does not look right, so betting is paused. Please reload the page or contact support.' },
+          elsewhere && !error && { kind: 'elsewhere', className: 'game-error', title: 'Wallet', text: elsewhere, dismissible: true, testid: 'signed-in-elsewhere', action: { label: 'Connect again', testid: 'connect-again', onClick: () => { setElsewhere(null); requestConnect(); } } },
           notice && !error && { kind: 'info', className: 'game-notice', title: toastTitle('info', notice), text: notice, dismissible: true },
           error && { kind: 'error', className: 'game-error', title: toastTitle('error', error, verificationBlocked), text: error, dismissible: !verificationBlocked },
         ].filter(Boolean)} />
@@ -1476,7 +1513,8 @@ export default function App() {
               <span className={autoVerify?.ok ? 'text-emerald-300' : 'text-red-300'}>{autoVerify?.ok ? 'Outcome and payout verified in your browser' : 'Verification mismatch. Review the proof.'}</span>
             </div>}
           </div>
-          <div className={`felt-table brand-felt rounded-xl ${landscape ? 'p-1.5' : 'p-2 sm:p-4'}`}>
+          <div className={`felt-table brand-felt rounded-xl relative ${landscape ? 'p-1.5' : 'p-2 sm:p-4'}`}>
+            <PlayCover covered={guard.covered} onDismiss={guard.dismiss} />
             <RouletteBoard
               bets={bets}
               portrait={false}

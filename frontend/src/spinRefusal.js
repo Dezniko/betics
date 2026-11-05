@@ -32,11 +32,12 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PREDICTED_400 = /total bet must be at least|total bet can be at most|could win more than|over the table limit|most you can bet/i;
 const STALE_LOCK = /stale or mismatched expectedCommitment/i;
 
-// 'auth' | 'table_changed' | 'stale_lock' | 'predicted' | 'unpredicted'
+// 'auth' | 'table_changed' | 'other_tab' | 'stale_lock' | 'predicted' | 'unpredicted' | 'transient'
 export function classifySpinRefusal(status, message = '', code = null) {
   const text = String(message || '');
   if (status === 401) return 'auth'; // sign-in expired: never reached the game, not counted
   if (status === 409 && code === 'table_changed') return 'table_changed'; // refused before anything was used
+  if (status === 409 && code === 'other_tab') return 'other_tab'; // another tab or game has a fresh round: nothing used, lock untouched
   if (status === 409 && STALE_LOCK.test(text)) return 'stale_lock'; // the lock moved on (another tab or device?)
   if (status === 402) return 'predicted'; // not enough balance
   if (status === 403) return 'predicted'; // Demo/Real mode or account state
@@ -55,6 +56,8 @@ export function budgetFor(kind) {
 }
 
 export const SIGN_IN_EXPIRED_MESSAGE = 'Your sign-in expired. Please connect your wallet again.';
+// Fallback when the server's own 'other tab' text is missing (the server text is shown when present).
+export const OTHER_TAB_MESSAGE = 'You are playing in another tab or game. Finish that round first.';
 export const REFUSAL_NO_LOCK_MESSAGE = 'The spin was refused and a new lock could not be checked. Betting is paused. Reload the page to try again.';
 export const TABLE_CHANGED_MESSAGE = 'The payout table changed. Please check it and confirm again.';
 export const LOST_REPLY_MESSAGE = 'The connection dropped before the spin was confirmed, and the server has no record of it, so your bet was not taken. The lock was opened and checked, and a new one is ready. You can spin again.';

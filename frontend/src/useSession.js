@@ -1,16 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { walletApi, resolveMode, modeBalance, STORAGE } from '../walletApi.js';
-import { needsConnectNotice, acceptConnectNotice } from '../connectNotice.js';
+import { walletApi, resolveMode, modeBalance, STORAGE, isSignedInElsewhere } from './walletApi.js';
+import { needsConnectNotice, acceptConnectNotice } from './connectNotice.js';
+import { tabIdFor } from './tabPresence.js';
 
-// Session, wallet profile, Real or Demo choice and the 18+ gate for the slot page. The same flow as
-// the roulette page (App.jsx): guest session by cookie, wallet sign in through the lazily loaded wallet
-// bundle, the one time "Before you connect" notice, and the mode rule from resolveMode.
+// Session, wallet profile, Real or Demo choice and the 18+ gate, shared by the lobby and the slot page.
+// The same flow as the roulette page (App.jsx): guest session by cookie, wallet sign in through the
+// lazily loaded wallet bundle, the one time "Before you connect" notice, and the mode rule from
+// resolveMode. While a wallet is connected the profile is read again every ME_POLL_MS, so a session
+// closed by a sign in from another browser (401 signed_in_elsewhere) is noticed within about 15 s:
+// the page goes back to Demo and `elsewhere` carries the server's text for a toast with "Connect again".
 const readStore = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
 const writeStore = (k, v) => { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch { /* private mode */ } };
 let walletModule = null;
-const loadWalletModule = () => (walletModule ||= import('../walletConnect.js'));
+const loadWalletModule = () => (walletModule ||= import('./walletConnect.js'));
+export const ME_POLL_MS = 10 * 1000;
 
-export default function useSlotSession({ busy = false } = {}) {
+export default function useSession({ busy = false } = {}) {
   const [user, setUser] = useState(null);       // session balances: { balanceCents, realTicsCents, demoAllowed, ... }
   const [profile, setProfile] = useState(null); // connected wallet, null for a guest
   const [storedMode, setStoredMode] = useState(() => readStore(STORAGE.mode));
@@ -18,7 +23,9 @@ export default function useSlotSession({ busy = false } = {}) {
   const [walletBusy, setWalletBusy] = useState(false);
   const [connectNoticeOpen, setConnectNoticeOpen] = useState(false);
   const [error, setError] = useState(null);
+  const [elsewhere, setElsewhere] = useState(null); // server text after the session was closed by another sign in
   const [identity, setIdentity] = useState(null);
+  const [tabId] = useState(() => { try { return tabIdFor(); } catch { return null; } });
   const busyRef = useRef(busy); busyRef.current = busy;
 
   const loadSession = useCallback(async (id) => {
@@ -26,27 +33,46 @@ export default function useSlotSession({ busy = false } = {}) {
     setUser({ ...u, identity: id });
     setIdentity(id);
   }, []);
+  // A wallet session closed from another browser: back to a guest session, the reason kept for the page.
+  const signedOutElsewhere = useCallback(async (e) => {
+    setProfile(null);
+    setElsewhere(e?.message || 'You connected this wallet in another browser or device. Connect again to play here.');
+    await loadSession('guest').catch(() => {});
+  }, [loadSession]);
   useEffect(() => {
     (async () => {
-      const p = await walletApi.me().catch(() => null);
+      let p = null;
+      try { p = await walletApi.me(); } catch (e) { if (isSignedInElsewhere(e)) { await signedOutElsewhere(e); return; } }
       setProfile(p);
       await loadSession(p?.address || 'guest');
     })().catch((e) => setError(String(e.message || e)));
-  }, [loadSession]);
+  }, [loadSession, signedOutElsewhere]);
 
   const refreshWallet = useCallback(async () => {
     try { const w = await walletApi.wallet(); setUser((u) => (u ? { ...u, ...w } : u)); } catch { /* keep the last known */ }
   }, []);
-  const refreshProfile = useCallback(async () => { const p = await walletApi.me().catch(() => null); if (p) setProfile(p); }, []);
+  const refreshProfile = useCallback(async () => {
+    try { const p = await walletApi.me(); if (p) setProfile(p); }
+    catch (e) { if (isSignedInElsewhere(e)) await signedOutElsewhere(e); }
+  }, [signedOutElsewhere]);
+  // Poll the profile while connected, so a session closed elsewhere is noticed quickly.
+  const connected = !!profile?.address;
+  useEffect(() => {
+    if (!connected) return undefined;
+    const t = setInterval(() => { refreshProfile(); }, ME_POLL_MS);
+    const onFocus = () => refreshProfile();
+    window.addEventListener('focus', onFocus);
+    return () => { clearInterval(t); window.removeEventListener('focus', onFocus); };
+  }, [connected, refreshProfile]);
 
   const switchIdentity = async (p) => {
     setProfile(p);
-    setError(null);
+    setError(null); setElsewhere(null);
     await loadSession(p?.address || 'guest');
   };
   const connectWallet = async () => {
     if (walletBusy || busyRef.current) return;
-    setWalletBusy(true); setError(null);
+    setWalletBusy(true); setError(null); setElsewhere(null);
     try {
       const w = await loadWalletModule();
       const p = await w.signIn();
@@ -82,6 +108,7 @@ export default function useSlotSession({ busy = false } = {}) {
     setUser((u) => (u ? { ...u, [m === 'real' ? 'realTicsCents' : 'balanceCents']: cents } : u));
   }, []);
 
-  return { user, profile, identity, mode, modeInfo, balance, ageOk, acceptAge, walletBusy, connectNoticeOpen, requestConnect, continueConnect, closeConnectNotice,
-    disconnectWallet, refreshWallet, refreshProfile, chooseMode, applyBalance, sessionError: error, clearSessionError: () => setError(null) };
+  return { user, profile, identity, tabId, mode, modeInfo, balance, ageOk, acceptAge, walletBusy, connectNoticeOpen, requestConnect, continueConnect, closeConnectNotice,
+    disconnectWallet, refreshWallet, refreshProfile, chooseMode, applyBalance, signedOutElsewhere, sessionError: error, clearSessionError: () => setError(null),
+    elsewhere, clearElsewhere: () => setElsewhere(null) };
 }

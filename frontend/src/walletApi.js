@@ -7,8 +7,12 @@ import { readFirstTouch } from './firstTouch.js';
 const API = '/api';
 
 export class ApiError extends Error {
-  constructor(message, status) { super(message); this.status = status; }
+  constructor(message, status, code = null) { super(message); this.status = status; this.code = code; }
 }
+
+// The wallet session was closed because the same wallet signed in from another browser or device.
+export const SIGNED_IN_ELSEWHERE = 'signed_in_elsewhere';
+export const isSignedInElsewhere = (e) => !!e && e.status === 401 && e.code === SIGNED_IN_ELSEWHERE;
 
 async function call(path, { method = 'GET', body } = {}) {
   const r = await fetch(`${API}${path}`, {
@@ -18,7 +22,7 @@ async function call(path, { method = 'GET', body } = {}) {
   });
   let data = null;
   try { data = await r.json(); } catch { /* empty body */ }
-  if (!r.ok) throw new ApiError((data && data.error) || 'Something went wrong. Please try again.', r.status);
+  if (!r.ok) throw new ApiError((data && data.error) || 'Something went wrong. Please try again.', r.status, (data && typeof data.code === 'string') ? data.code : null);
   return data;
 }
 
@@ -26,11 +30,13 @@ export const walletApi = {
   nonce: () => call('/wallet/nonce', { method: 'POST', body: {} }),
   verify: (message, signature) => call('/wallet/verify', { method: 'POST', body: { message, signature, firstTouch: readFirstTouch() } }),
   logout: () => call('/wallet/logout', { method: 'POST', body: {} }),
+  // null when no wallet is connected. A 401 with code signed_in_elsewhere is thrown (the page shows
+  // the server's text and goes back to Demo); callers that only want "connected or not" catch it.
   async me() {
     try {
       const p = await call('/wallet/me');
       return p && typeof p.address === 'string' ? p : null;
-    } catch (e) { if (e.status === 401) return null; throw e; }
+    } catch (e) { if (e.status === 401 && !isSignedInElsewhere(e)) return null; throw e; }
   },
   saveProfile: (email, consent) => call('/wallet/profile', { method: 'POST', body: { email, consent } }),
   terms: () => call('/wallet/terms', { method: 'POST', body: {} }),

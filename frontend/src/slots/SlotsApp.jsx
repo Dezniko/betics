@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { SLOT_MATH, BET_LEVELS } from '../../../backend/src/games/slotsMath.js';
 import { gridFor } from '../../../backend/src/games/slots.js';
 import BrandLogo from '../BrandLogo.jsx';
+import LobbyLink from '../LobbyLink.jsx';
 import GameToast, { toastTitle } from '../GameToast.jsx';
 import { SoundQuickControls, SoundSettingsDialog } from '../SoundControls.jsx';
 import WalletPanel from '../WalletPanel.jsx';
@@ -15,7 +16,8 @@ import { shortAddress } from '../walletApi.js';
 import { fmtMoney, fmtTics } from '../chips.js';
 import { displayedBalanceCents } from '../balanceDisplay.js';
 import { isCommitmentValid, isNextCommitmentSafe, readRevealedHashes, rememberRevealedSeed } from '../fairnessClient.js';
-import { postJsonWithTimeout, classifySpinRefusal } from '../spinRefusal.js';
+import { postJsonWithTimeout, classifySpinRefusal, OTHER_TAB_MESSAGE } from '../spinRefusal.js';
+import { isSignedInElsewhere } from '../walletApi.js';
 import { winTier, celebrationTiming, countEase } from '../winCelebration.js';
 import { ensureAudioContext } from '../sound.js';
 import { verifySlotRound } from './slotsVerify.js';
@@ -25,7 +27,8 @@ import { PAGE_COPY as C } from './slotCopy.js';
 import Reels from './Reels.jsx';
 import SlotPaytable from './SlotPaytable.jsx';
 import SlotFairness from './SlotFairness.jsx';
-import useSlotSession from './useSlotSession.js';
+import useSession from '../useSession.js';
+import { usePlayGuard, PlayCover } from '../PlayGuard.jsx';
 import * as sfx from './slotSound.js';
 import './slots.css';
 
@@ -59,8 +62,10 @@ export default function SlotsApp() {
 
   const [phase, setPhase] = useState('idle'); // idle | spinning | presenting
   const busy = phase !== 'idle';
-  const session = useSlotSession({ busy });
+  const session = useSession({ busy });
   const { user, profile, mode, modeInfo, balance } = session;
+  // One tab at a time: this tab announces its spins; another tab's spin covers the reels for 8 s.
+  const guard = usePlayGuard({ game: 'godsofpower', tabId: session.tabId });
 
   // Live game settings and the lock for the next round.
   const [config, setConfig] = useState(null);
@@ -92,6 +97,8 @@ export default function SlotsApp() {
     return () => { clearInterval(t); window.removeEventListener('focus', onFocus); };
   }, [session.identity, loadConfig, loadCommitment]);
   useEffect(() => { if (session.sessionError) { setError(session.sessionError); session.clearSessionError(); } }, [session.sessionError]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The wallet signed in from another browser: the server closed this session. Auto stops, the page is in Demo.
+  useEffect(() => { if (session.elsewhere) { autoRef.current = false; setAutoSpin(false); setWalletOpen(false); } }, [session.elsewhere]);
   const gameClosed = config?.enabled === false;
 
   // Bet level, the table limit and the balance.
@@ -286,6 +293,7 @@ export default function SlotsApp() {
     setActiveLine(null); setWinCells([]); setDimming(false); setScatterHot(false); setAnticipationFrom(null); setFreeMode(false);
     setSpinKey((k) => k + 1); setReelStates(Array(SLOT_MATH.reels).fill('spinning'));
     sfx.spinLoopStart();
+    guard.announce();
     const startedAt = performance.now();
     const { resp, data } = await postJsonWithTimeout(`${SLOT_API}/spin`, JSON.stringify(request.body));
     const settleReels = () => { setReelStates(ALL_STOPPED); sfx.spinLoopStop(); setCommittedStake(0); setPhase('idle'); };
@@ -295,6 +303,8 @@ export default function SlotsApp() {
     if (!resp.ok) {
       settleReels(); stopAuto();
       const kind = classifySpinRefusal(resp.status, data?.error, data?.code);
+      if (kind === 'other_tab') { setNotice(data?.error || OTHER_TAB_MESSAGE); return; } // nothing used, the lock is still ours
+      if (kind === 'auth' && isSignedInElsewhere({ status: resp.status, code: data?.code })) { session.signedOutElsewhere({ message: data?.error }); return; }
       if (kind === 'table_changed') { loadConfig(); setNotice(C.tableChanged); }
       else setError(data?.error || 'Something went wrong. Please try again.');
       // A refused spin may have moved the lock on; take the server's current one if it is still fresh.
@@ -362,6 +372,7 @@ export default function SlotsApp() {
   const spinLabel = phase === 'idle' ? C.spin : C.spinning;
   const toasts = [
     gameClosed && { kind: 'closed', className: 'game-notice', testid: 'game-closed', title: toastTitle('closed'), text: config.maintenanceMessage || C.gameClosed },
+    session.elsewhere && !error && { kind: 'elsewhere', className: 'game-error', title: 'Wallet', text: session.elsewhere, dismissible: true, testid: 'signed-in-elsewhere', action: { label: 'Connect again', testid: 'connect-again', onClick: () => { session.clearElsewhere(); session.requestConnect(); } } },
     notice && !error && { kind: 'info', className: 'game-notice', title: toastTitle('info', notice), text: notice, dismissible: true, testid: 'slot-notice' },
     error && { kind: 'error', className: 'game-error', title: toastTitle('error', error, blocked), text: error, dismissible: !blocked, testid: 'slot-error' },
   ].filter(Boolean);
@@ -375,7 +386,7 @@ export default function SlotsApp() {
           <span className={`commitment-status ${lastVerdict ? (lastVerdict.ok ? 'ok' : 'bad') : ''}`} aria-hidden="true"><LockGlyph /></span>
           <span className="commitment-text"><span className="commitment-label">{C.nextLock}</span><code>{commitment ? commitment.serverSeedHash.slice(0, 8) : '…'}</code></span>
         </button>
-        <a className="slot-link" href="/" data-testid="slot-roulette-link">{C.roulette}</a>
+        <LobbyLink className="slot-link" />
         <SoundQuickControls onOpen={() => setSoundOpen(true)} />
       </div>
       <div className="header-right slot-header-right">
@@ -400,7 +411,7 @@ export default function SlotsApp() {
           </button>
         )}
       </div>
-      <GameToast toasts={toasts} onDismiss={(kind) => { if (kind === 'error') setError(null); if (kind === 'info') setNotice(null); }} />
+      <GameToast toasts={toasts} onDismiss={(kind) => { if (kind === 'error') setError(null); if (kind === 'info') setNotice(null); if (kind === 'elsewhere') session.clearElsewhere(); }} />
     </header>
 
     <main className="slot-main" inert={anyModal ? true : undefined}>
@@ -437,6 +448,7 @@ export default function SlotsApp() {
               </motion.div>}
             </AnimatePresence>
           </Reels>
+          <PlayCover covered={guard.covered} onDismiss={guard.dismiss} />
         </div>
       </section>
 

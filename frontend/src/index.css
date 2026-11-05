@@ -611,6 +611,14 @@ body:has(.mobile-game) { height: 100dvh; min-height: 0; overflow: hidden; oversc
 .header-balance .gold-text { font-variant-numeric: tabular-nums; letter-spacing: .01em; }
 .sound-toolbar > button { background: linear-gradient(180deg, #1a1a24, #111118); border-color: var(--bx-line-strong); color: var(--bx-gold-hi); }
 .commitment-button code { color: var(--bx-gold) !important; }
+/* Lobby pill (both games): sits in the sound toolbar row, same family as the lock pill. */
+.lobby-link { display: inline-flex; align-items: center; gap: 5px; min-height: 30px; padding: 0 10px; border-radius: 999px; border: 1px solid rgba(214, 176, 106, 0.45);
+  background: linear-gradient(180deg, #1a1a24, #111118); color: var(--bx-gold-hi); font-family: var(--bx-display); font-size: 9px; letter-spacing: .12em; text-transform: uppercase; text-decoration: none; white-space: nowrap; touch-action: manipulation;
+  transition: border-color .15s ease, box-shadow .15s ease; }
+@media (hover: hover) { .lobby-link:hover { border-color: rgba(150, 120, 255, 0.6); box-shadow: 0 0 12px rgba(120, 90, 255, 0.3); } }
+.sound-toolbar > .lobby-link { margin-right: 2px; }
+.mobile-game .sound-toolbar > .lobby-link { min-height: 28px; padding: 0 7px; font-size: 7.5px; gap: 4px; }
+.phone-portrait header > div:first-child .lobby-link-row { grid-column: 1 / -1; grid-row: 3; justify-self: start; margin-top: 3px; min-height: 22px; padding: 0 8px; font-size: 7.5px; gap: 4px; }
 
 /* Chips: the selected denomination gets the neon ring */
 .denom-button[data-selected='true'] { filter: drop-shadow(0 0 8px rgba(130, 90, 255, 0.55)); }
@@ -807,6 +815,15 @@ body:has(.mobile-game) { height: 100dvh; min-height: 0; overflow: hidden; oversc
 .game-toast-text { display: grid; gap: 2px; min-width: 0; }
 .game-toast-text strong { font: 400 11px/1.3 Michroma, Inter, sans-serif; letter-spacing: .14em; text-transform: uppercase; color: var(--bx-gold-hi, #f1dcaa); }
 .game-toast-message { font-size: 14px; line-height: 1.4; color: #e4e0ec; overflow-wrap: anywhere; }
+/* A toast's one action (e.g. Connect again): a small gold pill under the message, clearly a button. */
+.game-toast-action { justify-self: start; margin-top: 4px; min-height: 30px; padding: 0 14px; border-radius: 999px; font: 400 10px/1 Michroma, Inter, sans-serif; letter-spacing: .12em; text-transform: uppercase;
+  color: #0e0e15; background: linear-gradient(180deg, var(--bx-gold-hi, #f1dcaa), var(--bx-gold, #d6b06a)); border: 1px solid rgba(255, 255, 255, 0.35); box-shadow: 0 0 12px rgba(214, 176, 106, 0.35); touch-action: manipulation; }
+.game-toast-action:hover { filter: brightness(1.06); }
+/* Cover over the reels or the felt while another tab of this browser is playing. */
+.play-cover { position: absolute; inset: 0; z-index: 30; display: grid; place-items: center; padding: 12px; border: 0; background: rgba(6, 6, 10, 0.72); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); color: var(--bx-text, #ede9e1); cursor: pointer; touch-action: manipulation; border-radius: inherit; }
+.play-cover-card { display: grid; justify-items: center; gap: 6px; padding: 16px 22px; border-radius: 14px; background: linear-gradient(180deg, rgba(22, 22, 32, 0.96), rgba(11, 11, 17, 0.97)); border: 1px solid rgba(166, 60, 255, 0.45); box-shadow: 0 0 24px rgba(130, 80, 255, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06); color: var(--bx-gold-hi, #f1dcaa); }
+.play-cover-card strong { font: 400 11px/1.3 Michroma, Inter, sans-serif; letter-spacing: .14em; text-transform: uppercase; }
+.play-cover-card span { font-size: 13px; color: #e4e0ec; }
 .game-toast-close { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: #b7b3c4; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1); }
 .game-toast-close:hover { color: #fff; border-color: rgba(241,220,170,.55); }
 .game-toast-error { border-color: rgba(255,107,129,.55); background: linear-gradient(180deg, rgba(42,16,26,.96), rgba(20,10,16,.96)); }
