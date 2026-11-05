@@ -82,22 +82,42 @@ export const Diamond = () => <Svg code="D" defs={<>
 // Gold bar: a stepped ingot with bevelled faces, a stamped panel, a hot specular and sparkles.
 const BAR_CLIP = 'gp-bar-clip';
 export const GoldBar = () => <Svg code="B" defs={<>
-  <linearGradient id="gp-bar" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#fff4c8" /><stop offset=".4" stopColor="#f0c452" /><stop offset=".75" stopColor="#c28a1c" /><stop offset="1" stopColor="#e8b946" /></linearGradient>
-  <linearGradient id="gp-bar-side" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#d9a83a" /><stop offset=".5" stopColor="#8d5f0c" /><stop offset="1" stopColor="#b0810f" /></linearGradient>
-  <linearGradient id="gp-bar-end" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stopColor="#6d4a08" /><stop offset="1" stopColor="#b58a28" /></linearGradient>
-  <clipPath id={BAR_CLIP}><polygon points="12,72 22,40 78,40 88,72" /><polygon points="22,40 31,26 69,26 78,40" /></clipPath>
+  <linearGradient id="gp-bar-top" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#fff7d6" /><stop offset=".22" stopColor="#ffd453" /><stop offset=".55" stopColor="#f0a41b" /><stop offset=".82" stopColor="#c77a06" /><stop offset="1" stopColor="#ffcf4a" /></linearGradient>
+  <linearGradient id="gp-bar-front" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#e39f1f" /><stop offset=".5" stopColor="#7d4f05" /><stop offset="1" stopColor="#b57710" /></linearGradient>
+  <linearGradient id="gp-bar-side" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stopColor="#4a3003" /><stop offset="1" stopColor="#96650d" /></linearGradient>
+  <linearGradient id="gp-bar-rim" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stopColor="#22d3ff" stopOpacity=".0" /><stop offset=".5" stopColor="#22d3ff" stopOpacity=".9" /><stop offset="1" stopColor="#a63cff" stopOpacity=".0" /></linearGradient>
+  <clipPath id={BAR_CLIP}><polygon points="26,52 36,38 92,38 82,52" /><polygon points="16,78 26,64 82,64 72,78" /><polygon points="8,64 18,50 74,50 64,64" /></clipPath>
 </>}>
-  <Glow id="gp-bar-glow" color="#f1c860" cy="58" rx="44" ry="30" />
-  <polygon points="12,72 22,40 78,40 88,72" fill="url(#gp-bar-side)" />
-  <polygon points="12,72 22,40 24,42 15,72" fill="url(#gp-bar-end)" opacity=".8" />
-  <polygon points="22,40 31,26 69,26 78,40" fill="url(#gp-bar)" />
-  <polygon points="22,40 31,26 36,26 28,40" fill="#fff8dc" opacity=".45" />
-  <rect x="32" y="48" width="36" height="14" rx="2.5" fill="none" stroke="#fff1c4" strokeWidth="1.6" opacity=".8" />
-  <path d="M38 55h24" stroke="#fff6d8" strokeWidth="2.2" strokeLinecap="round" opacity=".7" />
-  <path d="M33 29h30" stroke="#fffaf0" strokeWidth="2.4" strokeLinecap="round" opacity=".95" />
-  <path d="M14 70h72" stroke="#ffe39a" strokeWidth="1.2" strokeLinecap="round" opacity=".5" />
+  <Glow id="gp-bar-glow" color="#f6c95a" cy="56" rx="46" ry="32" />
+  <g transform="translate(50 50) scale(1.32) translate(-50 -60)">
+  {/* back bar (bottom right) */}
+  <polygon points="26,52 36,38 92,38 82,52" fill="url(#gp-bar-top)" />
+  <polygon points="26,52 82,52 82,64 26,64" fill="url(#gp-bar-front)" />
+  <polygon points="82,52 92,38 92,50 82,64" fill="url(#gp-bar-side)" />
+  {/* bottom left bar */}
+  <polygon points="8,64 18,50 74,50 64,64" fill="url(#gp-bar-top)" />
+  <polygon points="8,64 64,64 64,78 8,78" fill="url(#gp-bar-front)" />
+  <polygon points="64,64 74,50 74,64 64,78" fill="url(#gp-bar-side)" />
+  {/* top bar, resting across the two */}
+  <g transform="translate(14 -16)">
+    <polygon points="16,78 26,64 82,64 72,78" fill="url(#gp-bar-top)" />
+    <polygon points="16,78 72,78 72,92 16,92" fill="url(#gp-bar-front)" />
+    <polygon points="72,78 82,64 82,78 72,92" fill="url(#gp-bar-side)" />
+    <polygon points="26,64 82,64 80,66.5 28,66.5" fill="#fffbe6" opacity=".7" />
+    <path d="M30 72l22-.1" stroke="#7a5208" strokeWidth="1.3" strokeLinecap="round" opacity=".65" />
+    <text x="47" y="70.5" textAnchor="middle" fontFamily="var(--bx-display), sans-serif" fontSize="4.6" fontWeight="700" fill="#5a3c05" opacity=".85" transform="skewX(-34)">999.9</text>
+    <text x="52" y="76.5" textAnchor="middle" fontFamily="var(--bx-display), sans-serif" fontSize="3.4" fontWeight="700" fill="#5a3c05" opacity=".7" transform="skewX(-34)">FINE GOLD</text>
+    <path d="M18 85h52" stroke="#ffe9a8" strokeWidth="1" strokeLinecap="round" opacity=".35" />
+  </g>
+  {/* stamped marks on the lower bars */}
+  <path d="M30 59h30" stroke="#5a3c05" strokeWidth="1" strokeLinecap="round" opacity=".45" />
+  <path d="M14 71h26" stroke="#5a3c05" strokeWidth="1" strokeLinecap="round" opacity=".45" />
+  {/* neon rim light along the top edges */}
+  <polygon points="40,48 50,34 96,34 86,48" fill="none" stroke="url(#gp-bar-rim)" strokeWidth="1.2" opacity=".9" />
+  <path d="M8 78h56" stroke="#a63cff" strokeWidth="1" strokeLinecap="round" opacity=".55" />
   <Shine clip={BAR_CLIP} id="gp-bar" />
-  <Star x="25" y="30" r="4.5" delay={0.4} /><Star x="80" y="44" r="3.5" delay={1.6} color="#fff3c4" /><Star x="60" y="74" r="2.6" delay={2.7} />
+  </g>
+  <Star x="24" y="48" r="4.5" delay={0.3} /><Star x="88" y="36" r="3.6" delay={1.4} color="#fff3c4" /><Star x="52" y="42" r="3" delay={2.2} /><Star x="70" y="80" r="2.6" delay={3.1} color="#22d3ff" />
 </Svg>;
 
 // Ruby: a cushion cut with a table, crown facets, a hot rim light and a magenta glow.
