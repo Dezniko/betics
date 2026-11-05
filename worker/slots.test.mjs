@@ -17,7 +17,7 @@ import { SLOT_MATH, BET_LEVELS } from '../backend/src/games/slotsMath.js';
 import { makeUint32At } from '../backend/src/core/slotDraws.js';
 import { pageFor, withPageHead } from './seo.js';
 
-const MIGRATIONS = ['0001_platform.sql', '0002_payments.sql', '0003_tics.sql', '0004_spin_holds.sql', '0005_audit_fixes.sql', '0006_admin.sql', '0007_r3.sql', '0008_reaudit.sql', '0009_slots.sql'].map((f) => new URL(`../migrations/${f}`, import.meta.url).pathname);
+const MIGRATIONS = ['0001_platform.sql', '0002_payments.sql', '0003_tics.sql', '0004_spin_holds.sql', '0005_audit_fixes.sql', '0006_admin.sql', '0007_r3.sql', '0008_reaudit.sql', '0009_godsofpower.sql'].map((f) => new URL(`../migrations/${f}`, import.meta.url).pathname);
 const HOST = 'betics.example';
 const CASINO = '0xc0ffee0000000000000000000000000000000001';
 
@@ -97,7 +97,7 @@ function platform() {
   const guest = async () => { const r = await call('/api/session', { body: {} }); return r.headers.get('set-cookie').split(';')[0]; };
   const spin = async (cookie, stake, mode, extra = {}) => {
     const c = (await call('/api/fairness/commitment', { cookie })).data;
-    return call('/api/games/slots/spin', { cookie, body: { stake, requestId: randomUUID(), expectedCommitment: c, clientEntropy: randomBytes(32).toString('hex'), ...(mode ? { mode } : {}), ...extra } });
+    return call('/api/games/godsofpower/spin', { cookie, body: { stake, requestId: randomUUID(), expectedCommitment: c, clientEntropy: randomBytes(32).toString('hex'), ...(mode ? { mode } : {}), ...extra } });
   };
   const restore = () => { globalThis.fetch = realFetch; };
   return { env, DB, chain, call, rows, setTics, login, guest, spin, restore, objects };
@@ -128,14 +128,14 @@ const recoverAll = async (p) => { for (const obj of p.objects.values()) await ob
 test('config: the slot game loads, its public config carries the published maths, and the limits are checked', async () => {
   const p = platform();
   try {
-    const cfg = await loadGameConfig(p.DB, 'slots');
+    const cfg = await loadGameConfig(p.DB, 'godsofpower');
     assert.equal(cfg.name, 'Gods of Power');
     assert.equal(cfg.minStakeCents, 2000);
     const pub = publicConfig(cfg);
     assert.equal(pub.math.rtp, 92);
     assert.deepEqual(pub.math.betLevels, BET_LEVELS);
     assert.equal(pub.math.strips.length, 5);
-    const r = await p.call('/api/games/slots/config', { cookie: await p.guest() });
+    const r = await p.call('/api/games/godsofpower/config', { cookie: await p.guest() });
     assert.equal(r.status, 200); assert.equal(r.data.math.capMultiplier, 2000);
     assert.equal((await p.call('/api/games/roulette/config', { cookie: await p.guest() })).data.math.id, 'standard', 'roulette config unchanged');
     assert.equal(checkSlotLimits(2000, cfg), null);
@@ -150,12 +150,12 @@ test('config: the slot game loads, its public config carries the published maths
   } finally { p.restore(); }
 });
 
-test('the /slots page is served as the app with noindex and is not a search page', () => {
-  const page = pageFor('/slots');
+test('the /godsofpower page is served as the app with noindex and is not a search page', () => {
+  const page = pageFor('/godsofpower');
   assert.equal(page.noindex, true);
   assert.match(withPageHead('<html><head><title>x</title></head></html>', page), /noindex, nofollow/);
   assert.equal(pageFor('/').noindex, undefined);
-  assert.equal(pageFor('/slots/anything'), null);
+  assert.equal(pageFor('/godsofpower/anything'), null);
 });
 
 test('demo round: money moves once, the round is stored, and the revealed seed reproduces every stop', async () => {
@@ -166,11 +166,11 @@ test('demo round: money moves once, the round is stored, and the revealed seed r
     const r = await p.spin(cookie, 2000);
     assert.equal(r.status, 200, JSON.stringify(r.data));
     const d = r.data;
-    assert.equal(d.game, 'slots');
+    assert.equal(d.game, 'godsofpower');
     assert.equal(d.balanceAfterCents, before - 2000 + d.totalPayoutCents);
     assert.ok(Array.isArray(d.spins) && d.spins[0].stops.length === 5);
     const obj = p.objects.values().next().value;
-    const round = obj.one("SELECT * FROM rounds WHERE game_id = 'slots'");
+    const round = obj.one("SELECT * FROM rounds WHERE game_id = 'godsofpower'");
     assert.equal(round.stake_cents, 2000);
     assert.equal(round.payout_cents, d.totalPayoutCents);
     assert.deepEqual(JSON.parse(round.outcome_json).spins.map((s) => s.stops), d.spins.map((s) => s.stops));
@@ -191,16 +191,16 @@ test('replays, reused entropy, stale locks and bad stakes', async () => {
     const cookie = await p.guest();
     const c = (await p.call('/api/fairness/commitment', { cookie })).data;
     const body = { stake: 2000, requestId: randomUUID(), expectedCommitment: c, clientEntropy: randomBytes(32).toString('hex') };
-    const first = await p.call('/api/games/slots/spin', { cookie, body });
-    const again = await p.call('/api/games/slots/spin', { cookie, body });
+    const first = await p.call('/api/games/godsofpower/spin', { cookie, body });
+    const again = await p.call('/api/games/godsofpower/spin', { cookie, body });
     assert.equal(first.status, 200); assert.deepEqual(again.data, first.data, 'same reply');
     const obj = p.objects.values().next().value;
     assert.equal(obj.one("SELECT COUNT(*) AS n FROM rounds").n, 1, 'one round');
     // Same entropy, new request: refused.
     const c2 = (await p.call('/api/fairness/commitment', { cookie })).data;
-    assert.equal((await p.call('/api/games/slots/spin', { cookie, body: { ...body, requestId: randomUUID(), expectedCommitment: c2 } })).status, 409);
+    assert.equal((await p.call('/api/games/godsofpower/spin', { cookie, body: { ...body, requestId: randomUUID(), expectedCommitment: c2 } })).status, 409);
     // Old lock: refused and nothing consumed.
-    const stale = await p.call('/api/games/slots/spin', { cookie, body: { stake: 2000, requestId: randomUUID(), expectedCommitment: c, clientEntropy: randomBytes(32).toString('hex') } });
+    const stale = await p.call('/api/games/godsofpower/spin', { cookie, body: { stake: 2000, requestId: randomUUID(), expectedCommitment: c, clientEntropy: randomBytes(32).toString('hex') } });
     assert.equal(stale.status, 409);
     assert.equal(obj.one("SELECT COUNT(*) AS n FROM rounds").n, 1);
     assert.equal((await p.spin(cookie, 2001)).status, 400);

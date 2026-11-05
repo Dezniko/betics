@@ -194,10 +194,10 @@ test('SlotSymbols has a component for every symbol code in SLOT_MATH', () => {
   assert.ok(!/<image|href=|url\((?!#)/i.test(text), 'symbols must be inline SVG, not loaded images');
 });
 
-// Route: /slots renders the slot page without touching / , /terms or /how-it-works.
-test('main.jsx routes /slots (optional trailing slash) and keeps the other pages', () => {
+// Route: /godsofpower renders the slot page without touching / , /terms or /how-it-works.
+test('main.jsx routes /godsofpower (optional trailing slash) and keeps the other pages', () => {
   const text = fs.readFileSync(path.join(here, '..', 'src', 'main.jsx'), 'utf8');
-  assert.match(text, /\/\^\\\/slots\\\/\?\$\//);
+  assert.match(text, /\/\^\\\/godsofpower\\\/\?\$\//);
   assert.match(text, /\/\^\\\/terms\\\/\?\$\//);
   assert.match(text, /\/\^\\\/how-it-works\\\/\?\$\//);
   assert.match(text, /SlotsApp/);

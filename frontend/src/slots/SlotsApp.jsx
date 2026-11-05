@@ -88,7 +88,7 @@ export default function SlotsApp() {
     const t = setInterval(loadConfig, 30000);
     const onFocus = () => loadConfig();
     window.addEventListener('focus', onFocus);
-    fetch(`${API}/events`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'game_open', game: 'slots', screen: `${window.screen.width}x${window.screen.height}` }) }).catch(() => {});
+    fetch(`${API}/events`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'game_open', game: 'godsofpower', screen: `${window.screen.width}x${window.screen.height}` }) }).catch(() => {});
     return () => { clearInterval(t); window.removeEventListener('focus', onFocus); };
   }, [session.identity, loadConfig, loadCommitment]);
   useEffect(() => { if (session.sessionError) { setError(session.sessionError); session.clearSessionError(); } }, [session.sessionError]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -162,7 +162,7 @@ export default function SlotsApp() {
 
   const stopAuto = () => { autoRef.current = false; setAutoSpin(false); };
   const stopForVerification = (message) => {
-    fetch(`${API}/events`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'fairness_fail', game: 'slots', detail: String(message || 'verification failed') }) }).catch(() => {});
+    fetch(`${API}/events`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'fairness_fail', game: 'godsofpower', detail: String(message || 'verification failed') }) }).catch(() => {});
     blockedRef.current = true; setBlocked(true); stopAuto(); setError(message);
   };
 

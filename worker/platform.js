@@ -103,7 +103,7 @@ export function clearConfigCache() { cache.clear(); }
 export function publicConfig(config) {
   const head = { gameId: config.gameId, enabled: config.enabled, maintenanceMessage: config.enabled ? null : config.maintenanceMessage,
     minStakeCents: config.minStakeCents, maxStakeCents: config.maxStakeCents, maxWinCents: config.maxWinCents, currency: config.currency };
-  if (config.gameId === 'slots') {
+  if (config.gameId === 'godsofpower') {
     const m = SLOT_MATH;
     return { ...head, math: { id: m.id, label: m.label, rtp: m.rtp, reels: m.reels, rows: m.rows, lineCount: m.lineCount, betLevels: m.betLevels,
       symbols: m.symbols, lines: m.lines, strips: m.strips, pays: m.pays, scatterPays: m.scatterPays, freeSpins: m.freeSpins, capMultiplier: m.capMultiplier } };

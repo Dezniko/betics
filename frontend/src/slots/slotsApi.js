@@ -5,7 +5,7 @@ import { maxPayoutUnits } from '../../../backend/src/games/slots.js';
 import { fmtMoney } from '../chips.js';
 import { isCommitmentValid, readRevealedHashes } from '../fairnessClient.js';
 
-export const SLOT_API = '/api/games/slots';
+export const SLOT_API = '/api/games/godsofpower';
 export const RECEIPT_PREFIX = 'betics:slot-receipt:';
 export const RECEIPT_INDEX = 'betics:slot-receipt:index:v1';
 export const MAX_SLOT_RECEIPTS = 200;

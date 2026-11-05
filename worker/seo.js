@@ -19,7 +19,7 @@ export const PAGES = {
 
 // Pages served by the app but kept out of search (not in the sitemap, noindex): the slot while it is in testing.
 export const HIDDEN_PAGES = {
-  '/slots': {
+  '/godsofpower': {
     title: 'Gods of Power · qu-BETICS',
     description: 'Gods of Power, a five reel slot played with $TICS on qu-BETICS.',
   },

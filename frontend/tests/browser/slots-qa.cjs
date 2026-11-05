@@ -11,7 +11,7 @@ const group = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 const fmtTics = (units, decimals = 2) => { const abs = Math.abs(Math.round(units)); const whole = Math.floor(abs / 100), frac = String(abs % 100).padStart(2, '0'); return `${units < 0 ? '-' : ''}${group(whole)}${decimals ? `.${frac}` : ''} $TICS`; };
 const fmtShort = (units) => (Math.round(units) % 100 === 0 ? fmtTics(units, 0) : fmtTics(units));
 
-async function open(w, h, url = `${APP_URL}/slots`) {
+async function open(w, h, url = `${APP_URL}/godsofpower`) {
   const page = await (await fetch(`${CDP_URL}/json/new?about:blank`, { method: 'PUT' })).json();
   const ws = new WebSocket(page.webSocketDebuggerUrl); await new Promise((r) => (ws.onopen = r));
   let id = 0; const pending = new Map(), errors = [], responses = [];
@@ -20,7 +20,7 @@ async function open(w, h, url = `${APP_URL}/slots`) {
     const m = JSON.parse(e.data);
     if (m.id) { const p = pending.get(m.id); pending.delete(m.id); m.error ? p.reject(m.error) : p.resolve(m.result); }
     if (m.method === 'Runtime.exceptionThrown') errors.push(m.params.exceptionDetails.text + ' ' + (m.params.exceptionDetails.exception?.description || ''));
-    if (m.method === 'Network.responseReceived' && m.params.response.url.includes('/api/games/slots/spin')) responses.push(m.params.requestId);
+    if (m.method === 'Network.responseReceived' && m.params.response.url.includes('/api/games/godsofpower/spin')) responses.push(m.params.requestId);
   };
   const send = (method, params = {}) => new Promise((resolve, reject) => { const n = ++id; pending.set(n, { resolve, reject }); ws.send(JSON.stringify({ id: n, method, params })); });
   const ev = async (expression) => { const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw Error(JSON.stringify(r.exceptionDetails)); return r.result.value; };
@@ -117,7 +117,7 @@ async function responsiveness(x, label, baseline) {
     assert.ok(settled, `${label}: the round did not settle`);
     const reply = await x.lastSpinReply();
     assert.ok(reply && Number.isSafeInteger(reply.balanceAfterCents), `${label}: no spin reply captured`);
-    assert.equal(reply.game, 'slots');
+    assert.equal(reply.game, 'godsofpower');
     assert.equal(reply.stake, stake);
     await sleep(350);
     const balanceAfter = await x.ev(`document.querySelector('[data-testid="header-balance"]').textContent`);

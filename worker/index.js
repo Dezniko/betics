@@ -445,7 +445,7 @@ export default {
         if (inboxAction[2] !== 'dismiss') await recordEvent(env.DB, inboxAction[2] === 'seen' ? 'message_seen' : 'message_click', { player, meta, extra: { messageId: Number(inboxAction[1]) } }).catch(() => {});
         return secured(json({ ok: true }));
       }
-      const configRoute = url.pathname.match(/^\/api\/games\/(roulette|slots)\/config$/);
+      const configRoute = url.pathname.match(/^\/api\/games\/(roulette|godsofpower)\/config$/);
       if (configRoute && request.method === 'GET') {
         const config = await loadGameConfig(env.DB, configRoute[1]);
         if (!config) fail(404, 'game not found');
@@ -458,11 +458,12 @@ export default {
         if (!['screen', 'game_open', 'session_end', 'fairness_fail', 'round_error'].includes(type)) fail(400, 'invalid event type');
         const screen = typeof body.screen === 'string' && /^\d{2,5}x\d{2,5}$/.test(body.screen) ? body.screen : null;
         const extra = body.seconds ? { seconds: Math.min(86400, Number(body.seconds) || 0) } : typeof body.detail === 'string' ? { detail: body.detail.slice(0, 300) } : null;
-        await recordEvent(env.DB, type, { player, meta, gameId: 'roulette', screen, extra });
+        const eventGame = body.game === 'godsofpower' ? 'godsofpower' : 'roulette';
+        await recordEvent(env.DB, type, { player, meta, gameId: eventGame, screen, extra });
         return secured(json({ ok: true }));
       }
       if (url.pathname.startsWith('/api/payments')) return secured(json(await playerPayments(request, env, url, player, text)));
-      const spinRoute = request.method === 'POST' ? url.pathname.match(/^\/api\/games\/(roulette|slots)\/spin$/) : null;
+      const spinRoute = request.method === 'POST' ? url.pathname.match(/^\/api\/games\/(roulette|godsofpower)\/spin$/) : null;
       const isSpin = !!spinRoute;
       const spinGame = spinRoute ? spinRoute[1] : 'roulette';
       let holdId = null;
@@ -486,7 +487,7 @@ export default {
         // spinning at once can never be owed more than the wallet holds.
         if (spinBody.mode === 'real' && walletPlayer && live) {
           let worst = null, stake = 0;
-          if (spinGame === 'slots') {
+          if (spinGame === 'godsofpower') {
             // A slot round's worst case is its cap (the round stops there), so the booking is cap minus stake.
             if (Number.isSafeInteger(spinBody.stake) && spinBody.stake > 0) { stake = spinBody.stake; worst = slotMaxPayout(stake, SLOT_MATH); }
           } else {
@@ -1109,11 +1110,11 @@ export class DemoCasino {
         : this.sql.exec('UPDATE users SET balance_cents = ? WHERE id = 1', value));
       if (real) this.sql.exec('INSERT OR IGNORE INTO real_tics (id, balance_cents) VALUES (1, 0)');
       writeBalance(afterDebit);
-      const outcome = { game: 'slots', spins: round.spins.map((s) => ({ free: s.free, stops: s.stops, lineWins: s.lineWins, scatterCount: s.scatterCount, scatterPay: s.scatterPay, multiplier: s.multiplier, winUnits: s.winUnits, freeSpinsAdded: s.freeSpinsAdded })),
+      const outcome = { game: 'godsofpower', spins: round.spins.map((s) => ({ free: s.free, stops: s.stops, lineWins: s.lineWins, scatterCount: s.scatterCount, scatterPay: s.scatterPay, multiplier: s.multiplier, winUnits: s.winUnits, freeSpinsAdded: s.freeSpinsAdded })),
         freeSpinsAwarded: round.freeSpinsAwarded, freeSpinsPlayed: round.freeSpinsPlayed, capped: round.capped };
       const row = this.one(`INSERT INTO rounds
         (user_id, game, stake_cents, bet_json, server_seed, server_seed_hash, client_seed, nonce, receipt_json, game_id, math_id, config_version, currency, real_money, country, device)
-        VALUES (1, 'slots', ?, ?, ?, ?, ?, ?, ?, 'slots', ?, ?, ?, ?, ?, ?) RETURNING id`,
+        VALUES (1, 'godsofpower', ?, ?, ?, ?, ?, ?, ?, 'godsofpower', ?, ?, ?, ?, ?, ?) RETURNING id`,
         stake, JSON.stringify({ stake, lines: math.lineCount }), current.server_seed, current.server_seed_hash, effectiveClientSeed, current.nonce,
         JSON.stringify({ requestId: key, expectedCommitment: expected, clientEntropy: body.clientEntropy, mode }),
         math.id, config ? config.configVersion : 0, currency, real ? 1 : 0, context.country || null, context.device || null);
@@ -1125,7 +1126,7 @@ export class DemoCasino {
       const nextSeed = generateServerSeed();
       this.sql.exec('UPDATE fairness_commitments SET server_seed = ?, server_seed_hash = ?, nonce = 0 WHERE user_id = 1', nextSeed, hashServerSeed(nextSeed));
       const result = {
-        requestId: key, roundId, game: 'slots', stake, spins: round.spins, freeSpinsAwarded: round.freeSpinsAwarded, freeSpinsPlayed: round.freeSpinsPlayed, capped: round.capped,
+        requestId: key, roundId, game: 'godsofpower', stake, spins: round.spins, freeSpinsAwarded: round.freeSpinsAwarded, freeSpinsPlayed: round.freeSpinsPlayed, capped: round.capped,
         totalStakeCents: stake, totalPayoutCents: payout, mathId: math.id, mode, balanceBeforeCents: startBalance, balanceAfterCents: balanceAfter,
         fairness: {
           serverSeed: current.server_seed, serverSeedHash: current.server_seed_hash,
@@ -1191,8 +1192,8 @@ export class DemoCasino {
       if (method === 'POST' && pathname === '/api/demo/reset-balance') { const result = this.resetDemoBalance(body, demoStart, minStake); await this.flush(); return json(result); }
       if (method === 'POST' && pathname === '/api/fairness/client-seed') return json(this.setSeed(body));
       if (method === 'POST' && pathname === '/api/fairness/rotate') return json(this.rotateLock(body));
-      if (method === 'POST' && (pathname === '/api/games/roulette/spin' || pathname === '/api/games/slots/spin')) {
-        const run = pathname === '/api/games/slots/spin' ? (req, b, c) => this.spinSlots(req, b, c) : (req, b, c) => this.spin(req, b, c);
+      if (method === 'POST' && (pathname === '/api/games/roulette/spin' || pathname === '/api/games/godsofpower/spin')) {
+        const run = pathname === '/api/games/godsofpower/spin' ? (req, b, c) => this.spinSlots(req, b, c) : (req, b, c) => this.spin(req, b, c);
         // X-Hold tells the Worker whether the spin booking can be released (prelaunch audit P2). 'release' only
         // when this wallet knows the booking is no longer needed: the spin was refused before anything was
         // committed, or its balance is confirmed in the central copy. Everything else keeps it counted.

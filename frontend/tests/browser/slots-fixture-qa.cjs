@@ -21,7 +21,7 @@ async function makeRound(want) {
     const ok = want === 'free' ? round.freeSpinsAwarded > 0 && round.totalPayoutUnits > 0 : want === 'big' ? !round.freeSpinsAwarded && round.totalPayoutUnits >= 10 * stake : round.totalPayoutUnits > 0 && round.totalPayoutUnits < 2 * stake && !round.freeSpinsAwarded;
     if (!ok) continue;
     const before = 100000;
-    return { entropy, base, reply: { requestId: '00000000-0000-4000-8000-000000000001', roundId: 1, game: 'slots', stake, spins: round.spins, freeSpinsAwarded: round.freeSpinsAwarded, freeSpinsPlayed: round.freeSpinsPlayed, capped: round.capped,
+    return { entropy, base, reply: { requestId: '00000000-0000-4000-8000-000000000001', roundId: 1, game: 'godsofpower', stake, spins: round.spins, freeSpinsAwarded: round.freeSpinsAwarded, freeSpinsPlayed: round.freeSpinsPlayed, capped: round.capped,
       totalStakeCents: stake, totalPayoutCents: round.totalPayoutUnits, mathId: SLOT_MATH.id, mode: 'demo', balanceBeforeCents: before, balanceAfterCents: before - stake + round.totalPayoutUnits,
       fairness: { serverSeed: seed, serverSeedHash: sha(seed), clientSeed, clientSeedBase: base, clientEntropy: entropy, nonce: 0, nextCommitment: { serverSeedHash: sha(`${seed}-next`), clientSeed: base, nonce: 0 } } } };
   }
@@ -44,10 +44,10 @@ function fixtureScript({ entropy, reply }) {
       if(p==='/api/wallet/me')return json({error:'no wallet'},401);
       if(p==='/api/wallet')return json({balanceCents:reply.balanceAfterCents});
       if(p.endsWith('/fairness/commitment'))return json({serverSeedHash:reply.fairness.serverSeedHash,clientSeed:reply.fairness.clientSeedBase,nonce:0});
-      if(p.endsWith('/games/slots/config'))return json({gameId:'slots',enabled:true,minStakeCents:2000,maxStakeCents:1000000,maxWinCents:200000000});
+      if(p.endsWith('/games/godsofpower/config'))return json({gameId:'godsofpower',enabled:true,minStakeCents:2000,maxStakeCents:1000000,maxWinCents:200000000});
       if(p.endsWith('/casino/reserve'))return json({live:false});
       if(p.endsWith('/api/events'))return json({ok:true});
-      if(p.endsWith('/games/slots/spin')){const b=JSON.parse(opt.body);qaFixture.posts++;qaFixture.savedBeforePost=!!localStorage.getItem('betics:slot-receipt:'+b.requestId);qaFixture.body=b;await new Promise(r=>setTimeout(r,250));return json(reply);}
+      if(p.endsWith('/games/godsofpower/spin')){const b=JSON.parse(opt.body);qaFixture.posts++;qaFixture.savedBeforePost=!!localStorage.getItem('betics:slot-receipt:'+b.requestId);qaFixture.body=b;await new Promise(r=>setTimeout(r,250));return json(reply);}
       return json({error:'unknown fixture route'},404);};
   })()`;
 }
@@ -62,7 +62,7 @@ async function open(w, h, script) {
   await send('Runtime.enable'); await send('Page.enable');
   await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: w < 1100 });
   await send('Page.addScriptToEvaluateOnNewDocument', { source: script });
-  await send('Page.navigate', { url: `${APP_URL}/slots` });
+  await send('Page.navigate', { url: `${APP_URL}/godsofpower` });
   for (let i = 0; i < 150; i++) { await sleep(100); if (await ev(`(()=>{const s=document.querySelector('[data-testid="slot-spin"]');return !!s&&!s.disabled})()`).catch(() => false)) break; }
   const screenshot = async (name) => { const r = await send('Page.captureScreenshot', { format: 'png' }); const f = path.join(OUT, `${name}.png`); fs.writeFileSync(f, Buffer.from(r.data, 'base64')); return f; };
   return { send, ev, screenshot, errors, close: async () => { await send('Page.close').catch(() => {}); ws.close(); } };

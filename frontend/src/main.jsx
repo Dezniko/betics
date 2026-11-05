@@ -24,7 +24,7 @@ rememberFirstTouch();
 // increments and duplicate sound timers. Not needed for a local dev build.
 const terms = /^\/terms\/?$/.test(window.location.pathname);
 const how = /^\/how-it-works\/?$/.test(window.location.pathname);
-const slots = /^\/slots\/?$/.test(window.location.pathname);
+const slots = /^\/godsofpower\/?$/.test(window.location.pathname);
 // The slot game ships as its own chunk, so the roulette page downloads nothing extra.
 const SlotsApp = lazy(() => import('./slots/SlotsApp.jsx'));
 ReactDOM.createRoot(document.getElementById('root')).render(
