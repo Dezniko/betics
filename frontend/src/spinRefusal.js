@@ -28,6 +28,10 @@ export const MAX_REFUSED_LOG = 50;
 const MAX_TIMES = 200;
 const HASH = /^[a-f0-9]{64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// The games that share one lock per player. An open-lock entry says which game sent the random value,
+// so each page checks only its own entries and verifies a found round with its own checker.
+export const GAMES = new Set(['roulette', 'godsofpower']);
+export const DEFAULT_GAME = 'roulette'; // entries saved before game tags existed were roulette's
 
 const PREDICTED_400 = /total bet must be at least|total bet can be at most|could win more than|over the table limit|most you can bet/i;
 const STALE_LOCK = /stale or mismatched expectedCommitment/i;
@@ -59,16 +63,41 @@ export function budgetFor(kind) {
   return null;
 }
 
-// Did this browser itself see another tab of the game play within the server's other-tab window (8 s)
-// plus a small grace for clock and delivery differences? Two local signals count: a BroadcastChannel
-// announcement from another tab (playGuard, `lastForeignAt`) and a tabPresence heartbeat from another
-// tab (`otherTabRecently`, passed in so this stays pure). Only then is a 409 other_tab predicted.
+// Did this browser itself see another tab PLAY within the server's other-tab window (8 s) plus a small
+// grace for clock and delivery differences? Only play signals count: a BroadcastChannel announcement
+// from another tab (playGuard, `lastForeignAt`) or a tabPresence play stamp from another tab
+// (`otherTabRecently`, pass tabPresence.otherTabPlayedRecently; a tab that merely exists never counts).
+// `ownSpin` is this tab's previous posted spin ({ at, game }, noteSpinPosted): when THIS tab posted a
+// spin on the OTHER game within the window (slot, then roulette in the same tab), the server's refusal
+// is predicted too, because its one-game rule refuses the second game and consumes nothing.
 export const OTHER_TAB_SEEN_WINDOW_MS = 8 * 1000;
 export const OTHER_TAB_GRACE_MS = 2 * 1000;
-export function otherTabSeenRecently({ lastForeignAt = null, otherTabRecently = null, now = Date.now(), windowMs = OTHER_TAB_SEEN_WINDOW_MS + OTHER_TAB_GRACE_MS } = {}) {
+export function otherTabSeenRecently({ lastForeignAt = null, otherTabRecently = null, ownSpin = null, game = null, now = Date.now(), windowMs = OTHER_TAB_SEEN_WINDOW_MS + OTHER_TAB_GRACE_MS } = {}) {
   if (Number.isFinite(lastForeignAt) && now - lastForeignAt <= windowMs && lastForeignAt <= now + 60 * 1000) return true;
+  if (ownSpinSwitchedGame(ownSpin, game, now, windowMs)) return true;
   if (typeof otherTabRecently === 'function') { try { return otherTabRecently(now, windowMs) === true; } catch { return false; } }
   return false;
+}
+// This tab's last posted spin, kept in sessionStorage (a reload of the same tab keeps it, another tab
+// does not) and written by both games right before the post. Returns the PREVIOUS record, so the spin
+// about to be posted never explains its own refusal.
+const LAST_SPIN_KEY = 'betics:last-spin-at';
+function sessionStore() { try { return globalThis.sessionStorage; } catch { return null; } }
+export function readLastSpin(storage = sessionStore()) {
+  const v = readJson(storage, LAST_SPIN_KEY);
+  return v && Number.isFinite(v.at) && GAMES.has(v.game) ? { at: v.at, game: v.game } : null;
+}
+export function noteSpinPosted(game, now = Date.now(), storage = sessionStore()) {
+  const previous = readLastSpin(storage);
+  if (GAMES.has(game)) writeJson(storage, LAST_SPIN_KEY, { at: now, game });
+  return previous;
+}
+// True when the previous spin of this tab was on another game inside the window (the server's one-game
+// rule then refuses this spin with 409 other_tab). The same game again is never an explanation: the
+// server does not refuse that, so such a refusal stays on its word alone.
+export function ownSpinSwitchedGame(ownSpin, game, now = Date.now(), windowMs = OTHER_TAB_SEEN_WINDOW_MS + OTHER_TAB_GRACE_MS) {
+  return !!ownSpin && GAMES.has(game) && GAMES.has(ownSpin.game) && ownSpin.game !== game
+    && Number.isFinite(ownSpin.at) && now - ownSpin.at <= windowMs && ownSpin.at <= now + 60 * 1000;
 }
 
 export const SIGN_IN_EXPIRED_MESSAGE = 'Your sign-in expired. Please connect your wallet again.';
@@ -84,6 +113,14 @@ export const OTHER_DEVICE_ALONE_MESSAGE = 'Your lock was used by a spin this tab
 export const OWN_ROUND_SWAPPED_MESSAGE = 'An earlier spin of yours does not use the random value this browser sent. Betting is stopped. Inspect the round before continuing.';
 export const STALE_LOCK_MESSAGE = 'The server says your lock changed, but it did not show the old key. Betting is paused. Reload the page or contact support.';
 export const NEVER_OPENED_MESSAGE = 'An earlier spin used a lock the server never opened, so this page could not check it. It counts toward the safety limit for refused spins.';
+// Slot page: the states that used to ask for a reload now recover on their own (the lock is loaded again, a
+// saved lock retired through the reveal, the round history checked) with a few spaced retries.
+export const LOCK_RECHECK_MESSAGE = 'The lock could not be checked yet. Betting is paused while the page tries again.';
+export const LOST_REPLY_RECHECK_MESSAGE = 'The connection dropped before the spin was confirmed. Betting is paused while the page checks the lock again.';
+export const STALE_LOCK_RECHECK_MESSAGE = 'The server says your lock changed, but it did not show the old key. Betting is paused while the page looks for the round that used it.';
+export const LOCK_CHANGED_MESSAGE = 'The server changed the lock without showing the old key, so betting stays paused.';
+export const LOCK_CHECK_GAVE_UP_MESSAGE = 'The page will try again when you come back to it. If this does not clear, please contact support.';
+export const EARLIER_ROUND_FAILED_MESSAGE = 'An earlier spin does not check out. Betting is stopped. Inspect the round before continuing.';
 
 const clean = (s) => String(s || '').replace(/[\u2013\u2014]/g, '-').replace(/\s+/g, ' ').trim().slice(0, 160);
 // Toast text after a refused spin whose lock was opened and checked. Shows the server's own reason.
@@ -122,20 +159,22 @@ export function recordRefusal(budget, now = Date.now(), storage = store()) {
 export function refusalLimitReached(count, budget = 'unpredicted') { return Number.isSafeInteger(count) && count >= BUDGET_LIMITS[budget]; }
 
 // ---- locks whose random value was sent but whose key this browser has not checked yet ----
-// Entry: { identity, serverSeedHash, clientSeed, nonce, clientEntropy, requestId, at, refused, counted }
+// Entry: { identity, game, serverSeedHash, clientSeed, nonce, clientEntropy, requestId, at, refused, counted }
+// `game`: which game sent it ('roulette' | 'godsofpower'; a missing tag reads as roulette).
 // `refused`: the server answered with a refusal. `counted`: already counted (or never to be counted).
 function validOpenLock(e) {
   return !!e && typeof e === 'object' && typeof e.identity === 'string' && e.identity.length > 0 && e.identity.length <= 64
     && HASH.test(e.serverSeedHash || '') && typeof e.clientSeed === 'string' && e.clientSeed.length > 0 && e.clientSeed.length <= 64
     && Number.isSafeInteger(e.nonce) && e.nonce >= 0 && HASH.test(e.clientEntropy || '') && UUID.test(e.requestId || '')
-    && Number.isFinite(e.at) && typeof e.refused === 'boolean' && typeof e.counted === 'boolean';
+    && Number.isFinite(e.at) && typeof e.refused === 'boolean' && typeof e.counted === 'boolean' && (e.game === undefined || GAMES.has(e.game));
 }
+const withGame = (e) => (e.game === undefined ? { ...e, game: DEFAULT_GAME } : e);
 export function readOpenLocks(storage = store()) {
   const list = readJson(storage, OPEN_KEY);
-  return Array.isArray(list) ? list.filter(validOpenLock).slice(-MAX_OPEN) : [];
+  return Array.isArray(list) ? list.filter(validOpenLock).map(withGame).slice(-MAX_OPEN) : [];
 }
 export function rememberOpenLock(entry, storage = store()) {
-  const e = { refused: false, counted: false, at: Date.now(), ...entry };
+  const e = { refused: false, counted: false, at: Date.now(), game: DEFAULT_GAME, ...entry };
   if (!validOpenLock(e)) throw new Error('invalid open lock');
   const list = [...readOpenLocks(storage).filter((x) => x.serverSeedHash !== e.serverSeedHash), e].slice(-MAX_OPEN);
   writeJson(storage, OPEN_KEY, list);
@@ -151,8 +190,10 @@ export function forgetOpenLock(hash, storage = store()) {
   writeJson(storage, OPEN_KEY, list);
   return list;
 }
-export function findOpenLock(hash, identity, storage = store()) {
-  return readOpenLocks(storage).find((x) => x.serverSeedHash === hash && x.identity === identity) || null;
+// The entry for this lock and player. Without a game filter any game's entry is found: the lock is one per
+// player, so a random value sent for it by EITHER game means it must not be bet on again as it is.
+export function findOpenLock(hash, identity, storage = store(), game = null) {
+  return readOpenLocks(storage).find((x) => x.serverSeedHash === hash && x.identity === identity && (!game || x.game === game)) || null;
 }
 // A current lock must be opened through the reveal before betting when it saw a refusal, or when
 // its spin was sent long enough ago that no tab can still be waiting for it.
@@ -160,8 +201,14 @@ export function mustRetireLock(entry, now = Date.now()) {
   return !!entry && (entry.refused || now - entry.at > OPEN_LOCK_GRACE_MS);
 }
 // Locks of this player that are no longer the current lock and need a look in the round history.
-export function locksToCheck(identity, currentHash, now = Date.now(), storage = store()) {
-  return readOpenLocks(storage).filter((x) => x.identity === identity && x.serverSeedHash !== currentHash && mustRetireLock(x, now));
+// With `game`, only that game's entries: a page never judges the other game's rounds with its own checker.
+export function locksToCheck(identity, currentHash, now = Date.now(), storage = store(), { game = null } = {}) {
+  return readOpenLocks(storage).filter((x) => x.identity === identity && x.serverSeedHash !== currentHash && (!game || x.game === game) && mustRetireLock(x, now));
+}
+// Which game a /api/rounds row belongs to (the Durable Object row says `game`, the central copy `game_id`).
+export function roundGame(round) {
+  const g = round?.game ?? round?.game_id;
+  return GAMES.has(g) ? g : DEFAULT_GAME;
 }
 // The round in GET /api/rounds that used this lock, and whether it was this browser's own spin.
 export function findRoundForLock(rounds, entry) {

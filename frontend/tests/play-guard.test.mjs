@@ -114,12 +114,14 @@ test('a 409 other_tab refusal is predicted (uncounted, lock kept) only when anot
   assert.match(branch, /forgetOpenLock\(entry\.serverSeedHash\)/, 'the lock is not retired through the reveal');
   assert.match(branch, /setNotice\(reason \|\| OTHER_TAB_MESSAGE\)/, 'the server text goes in a notice, not an error');
   assert.ok(!/recordRefusal/.test(branch), 'no budget is touched');
-  assert.match(app, /const otherTabSeen = otherTabSeenRecently\(\{ lastForeignAt: guard\.foreignAt\(\), otherTabRecently: \(now, w\) => otherTabRecently\(presenceRef\.current\?\.id \?\? null, now, undefined, w\) \}\);/, 'roulette asks its own play guard and heartbeat');
+  assert.match(app, /const otherTabSeen = otherTabSeenRecently\(\{ lastForeignAt: guard\.foreignAt\(\), ownSpin, game: 'roulette', otherTabRecently: \(now, w\) => otherTabPlayedRecently\(presenceRef\.current\?\.id \?\? null, now, undefined, w\) \}\);/, 'roulette asks its own play guard, the PLAY stamp of other tabs and its own last spin');
+  assert.match(app, /notePlay\(presenceRef\.current\?\.id \?\? null\);\s*const ownSpin = noteSpinPosted\('roulette'\);/, 'roulette stamps its play before the post');
   assert.match(app, /classifySpinRefusal\(resp\.status, reason, data\?\.code, \{ otherTabSeen \}\)/);
   assert.match(app, /if \(kind === 'other_tab_unseen'\) \{ setError\(`\$\{OTHER_TAB_UNSEEN_MESSAGE\}/, 'the unseen case is told after the lock was retired');
   const slot = src('slots/SlotsApp.jsx');
   assert.match(slot, /if \(kind === 'other_tab'\) \{ forgetOpenLock\(entry\.serverSeedHash\); settleReelsRef\.current\(\); setNotice\(reason \|\| OTHER_TAB_MESSAGE\); return; \}/);
-  assert.match(slot, /const otherTabSeen = otherTabSeenRecently\(\{ lastForeignAt: guard\.foreignAt\(\), otherTabRecently: \(now, w\) => otherTabRecently\(session\.tabId, now, undefined, w\) \}\);/, 'the slot asks its own play guard and heartbeat');
+  assert.match(slot, /const otherTabSeen = otherTabSeenRecently\(\{ lastForeignAt: guard\.foreignAt\(\), ownSpin, game: 'godsofpower', otherTabRecently: \(now, w\) => otherTabPlayedRecently\(session\.tabId, now, undefined, w\) \}\);/, 'the slot asks its own play guard, the PLAY stamp of other tabs and its own last spin');
+  assert.match(slot, /notePlay\(session\.tabId\);\s*const ownSpin = noteSpinPosted\('godsofpower'\);/, 'the slot stamps its play before the post');
   assert.match(slot, /classifySpinRefusal\(resp\.status, reason, data\?\.code, \{ otherTabSeen \}\)/);
   assert.match(slot, /if \(kind === 'other_tab_unseen'\) \{ setError\(`\$\{OTHER_TAB_UNSEEN_MESSAGE\}/);
   assert.match(src('PlayGuard.jsx'), /foreignAtRef\.current = m\.at;/, 'the guard keeps when another tab last announced, readable synchronously');

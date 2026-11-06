@@ -57,3 +57,36 @@ test('the verifier agrees with the engine on random rounds including free spin r
   }
   assert.ok(sawFree, 'at least one free spin round in 1500 (1 in 140 expected)');
 });
+
+test('a recorded grid that disagrees with its own reel stops is a MISMATCH; a proof without the expected block prints a WARNING', async () => {
+  const { gridFor } = await import('../../backend/src/games/slots.js');
+  const m = await import(verifier.href);
+  const dir = mkdtempSync(join(tmpdir(), 'verify-slots-grid-'));
+  copyFileSync(verifier, join(dir, 'verify-slots.mjs'));
+  const seed = crypto.randomBytes(32).toString('hex');
+  const honest = proofFor(seed, 'w:' + 'e'.repeat(64), 0);
+  // With the honest picture: still OK.
+  const withGrid = JSON.parse(JSON.stringify(honest)); withGrid.spins = withGrid.spins.map((s) => ({ ...s, grid: gridFor(s.stops, SLOT_MATH) }));
+  assert.equal(m.verifyProof(withGrid).ok, true);
+  // Same stops, same win, doctored picture: caught.
+  const doctored = JSON.parse(JSON.stringify(withGrid)); doctored.spins[0].grid = doctored.spins[0].grid.map((row) => row.map(() => 'W'));
+  const r = m.verifyProof(doctored);
+  assert.equal(r.ok, false); assert.ok(r.problems.some((p) => /Spin 1: the recorded picture differs from the one the reel stops give/.test(p)), r.problems.join(' '));
+  writeFileSync(join(dir, 'grid.json'), JSON.stringify(doctored));
+  let code = 0, text = '';
+  try { execFileSync(process.execPath, ['verify-slots.mjs', 'grid.json'], { cwd: dir, encoding: 'utf8' }); } catch (e) { code = e.status; text = e.stdout; }
+  assert.equal(code, 1); assert.match(text, /MISMATCH/); assert.match(text, /recorded picture differs/);
+  // No expected block: the result is OK (internal consistency) but the output says the pre-bet lock was not checked.
+  const { expected, ...bare } = honest;
+  assert.equal(m.verifyProof(bare).expectedChecked, false); assert.equal(m.verifyProof(honest).expectedChecked, true);
+  writeFileSync(join(dir, 'bare.json'), JSON.stringify(bare));
+  const out = execFileSync(process.execPath, ['verify-slots.mjs', 'bare.json'], { cwd: dir, encoding: 'utf8' });
+  assert.match(out, /^OK: \d+ spin/); assert.match(out, /^WARNING: .*no "expected" block.*pre-bet lock was NOT checked/m);
+  assert.equal(m.NO_EXPECTED_WARNING.startsWith('WARNING:'), true);
+  writeFileSync(join(dir, 'full.json'), JSON.stringify(honest));
+  assert.doesNotMatch(execFileSync(process.execPath, ['verify-slots.mjs', 'full.json'], { cwd: dir, encoding: 'utf8' }), /WARNING/, 'no warning when the expected block is there');
+  // A mismatch without the expected block prints both.
+  const bareBad = JSON.parse(JSON.stringify(bare)); bareBad.totalPayoutCents += 100;
+  writeFileSync(join(dir, 'bare-bad.json'), JSON.stringify(bareBad));
+  try { execFileSync(process.execPath, ['verify-slots.mjs', 'bare-bad.json'], { cwd: dir, encoding: 'utf8' }); assert.fail('should exit 1'); } catch (e) { assert.match(e.stdout, /MISMATCH/); assert.match(e.stdout, /WARNING/); }
+});

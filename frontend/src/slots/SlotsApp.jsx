@@ -13,17 +13,19 @@ import { useCasinoReserve } from '../CasinoReserve.jsx';
 import { fmtMoney, fmtTics } from '../chips.js';
 import { headerLayout } from '../headerModel.js';
 import { displayedBalanceCents } from '../balanceDisplay.js';
-import { isCommitmentValid, isNextCommitmentSafe, readRevealedHashes, rememberRevealedSeed, revealAndRetireLock, fetchPlayerRounds } from '../fairnessClient.js';
-import { postJsonWithTimeout, classifySpinRefusal, budgetFor, recordRefusal, refusalStopMessage, refusalRetiredMessage, rememberOpenLock, updateOpenLock, forgetOpenLock, findRoundForLock,
-  addRefusedSlotSpin, slotWouldHaveText, otherTabSeenRecently, waitForRoundWithLock, OTHER_TAB_MESSAGE, OTHER_TAB_UNSEEN_MESSAGE, SIGN_IN_EXPIRED_MESSAGE, REFUSAL_NO_LOCK_MESSAGE,
-  LOST_REPLY_MESSAGE, LOST_REPLY_PAUSED_MESSAGE, OTHER_DEVICE_MESSAGE, OTHER_DEVICE_ALONE_MESSAGE, STALE_LOCK_MESSAGE } from '../spinRefusal.js';
-import { startPresence, otherTabRecently } from '../tabPresence.js';
+import { isCommitmentValid, isNextCommitmentSafe, readRevealedHashes, rememberRevealedSeed, revealAndRetireLock, fetchPlayerRounds, verifyRevealedRound } from '../fairnessClient.js';
+import { postJsonWithTimeout, classifySpinRefusal, budgetFor, recordRefusal, refusalStopMessage, refusalRetiredMessage, rememberOpenLock, updateOpenLock, forgetOpenLock, findOpenLock, findRoundForLock,
+  locksToCheck, mustRetireLock, canAcceptReloadedLock, ownRoundProblems, noteSpinPosted, OPEN_LOCK_GRACE_MS,
+  addRefusedSlotSpin, slotWouldHaveText, otherTabSeenRecently, waitForRoundWithLock, OTHER_TAB_MESSAGE, OTHER_TAB_UNSEEN_MESSAGE, SIGN_IN_EXPIRED_MESSAGE,
+  LOST_REPLY_MESSAGE, OTHER_DEVICE_MESSAGE, OTHER_DEVICE_ALONE_MESSAGE, OWN_ROUND_SWAPPED_MESSAGE, NEVER_OPENED_MESSAGE,
+  LOCK_RECHECK_MESSAGE, LOST_REPLY_RECHECK_MESSAGE, STALE_LOCK_RECHECK_MESSAGE, LOCK_CHANGED_MESSAGE, LOCK_CHECK_GAVE_UP_MESSAGE, EARLIER_ROUND_FAILED_MESSAGE } from '../spinRefusal.js';
+import { startPresence, otherTabRecently, otherTabPlayedRecently, notePlay } from '../tabPresence.js';
 import { isSignedInElsewhere } from '../walletApi.js';
 import { winTier, celebrationTiming, countEase } from '../winCelebration.js';
 import { ensureAudioContext } from '../sound.js';
 import { verifySlotRound, recomputeSlotRound, sha256Hex } from './slotsVerify.js';
-import { slotRoundFromRow, withoutSlotBalance } from './slotHistory.js';
-import { SLOT_API, createSlotRequest, saveSlotReceipt, betLevelStates, pickBetLevel, stepBetLevel, fmtBet, autoShouldStop } from './slotsApi.js';
+import { slotRoundFromRow, withoutSlotBalance, checkSlotHistoryRound } from './slotHistory.js';
+import { SLOT_API, createSlotRequest, saveSlotReceipt, readSlotReceipt, betLevelStates, pickBetLevel, stepBetLevel, fmtBet, autoShouldStop } from './slotsApi.js';
 import { buildTimeline, TIMING, winningCells, prefersReducedMotion, motionEffects } from './slotAnim.js';
 import { PAGE_COPY as C } from './slotCopy.js';
 import Reels from './Reels.jsx';
@@ -81,24 +83,26 @@ export default function SlotsApp() {
   const loadConfig = useCallback(async () => {
     try { const r = await fetch(`${SLOT_API}/config`); if (r.ok) setConfig(await r.json()); } catch { /* keep the last known */ }
   }, []);
-  const loadCommitment = useCallback(async () => {
-    try {
-      const r = await fetch(`${API}/fairness/commitment`);
-      const c = await r.json();
-      let revealed = []; try { revealed = readRevealedHashes(); } catch { revealed = []; }
-      if (!r.ok || !isCommitmentValid(c) || revealed.includes(c.serverSeedHash)) throw new Error(C.noLock);
-      setCommitment(Object.freeze({ ...c }));
-    } catch (e) { setCommitment(null); setError(e.message || C.noLock); }
-  }, []);
+  // The lock is loaded (and the saved open locks reconciled with the round history) by recoverLock, defined with
+  // the refusal helpers below; the effect reaches it through a ref so it always runs the latest closure.
+  const recoverRef = useRef(null);
+  const checkOpenLocksRef = useRef(null);
+  const busyRef = useRef(false); busyRef.current = busy;
+  const recoverTimerRef = useRef(0);
+  const recoveringRef = useRef(false);
+  const pendingHashRef = useRef(null); // the lock a failed request left behind, for the next recovery attempt
+  const lockErrorRef = useRef(false); // the shown error is a lock recovery message (cleared when recovery succeeds)
   useEffect(() => {
     if (!user) return;
-    loadConfig(); loadCommitment();
+    loadConfig(); recoverRef.current?.();
     const t = setInterval(loadConfig, 30000);
-    const onFocus = () => loadConfig();
+    // Locks another tab may still have been spinning on are looked at once they are old enough.
+    const grace = setTimeout(() => { if (!busyRef.current && commitmentRef.current) checkOpenLocksRef.current?.(commitmentRef.current.serverSeedHash).catch(() => {}); }, OPEN_LOCK_GRACE_MS + 1000);
+    const onFocus = () => { loadConfig(); if (!commitmentRef.current && !blockedRef.current && !busyRef.current) recoverRef.current?.(pendingHashRef.current); };
     window.addEventListener('focus', onFocus);
     fetch(`${API}/events`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'game_open', game: 'godsofpower', screen: `${window.screen.width}x${window.screen.height}` }) }).catch(() => {});
-    return () => { clearInterval(t); window.removeEventListener('focus', onFocus); };
-  }, [session.identity, loadConfig, loadCommitment]);
+    return () => { clearInterval(t); clearTimeout(grace); clearTimeout(recoverTimerRef.current); window.removeEventListener('focus', onFocus); };
+  }, [session.identity, loadConfig]);
   useEffect(() => { if (session.sessionError) { setError(session.sessionError); session.clearSessionError(); } }, [session.sessionError]); // eslint-disable-line react-hooks/exhaustive-deps
   // The wallet signed in from another browser: the server closed this session. Auto stops, the page is in Demo.
   useEffect(() => { if (session.elsewhere) { autoRef.current = false; setAutoSpin(false); setSheet(null); } }, [session.elsewhere]);
@@ -115,7 +119,7 @@ export default function SlotsApp() {
   // counts up (a count-up value with cents must not widen the header mid-animation).
   const portraitDecimals = balance != null && Math.round(balance) % 100 === 0 ? 0 : 2;
   const balanceText = user && shownBalance != null ? (layout === 'portrait' ? fmtTics(balanceOverride != null ? Math.round(shownBalance / (portraitDecimals ? 1 : 100)) * (portraitDecimals ? 1 : 100) : shownBalance, { decimals: portraitDecimals }) : fmtMoney(shownBalance)) : '...';
-  const levelStates = useMemo(() => betLevelStates({ tableLimit, balance, minStakeCents: config?.minStakeCents ?? null, maxStakeCents: config?.maxStakeCents ?? null }), [tableLimit, balance, config?.minStakeCents, config?.maxStakeCents]);
+  const levelStates = useMemo(() => betLevelStates({ tableLimit, balance, minStakeCents: config?.minStakeCents ?? null, maxStakeCents: config?.maxStakeCents ?? null, maxHouseLossCents: config?.maxHouseLossCents ?? null }), [tableLimit, balance, config?.minStakeCents, config?.maxStakeCents, config?.maxHouseLossCents]);
   const betState = levelStates.find((s) => s.stake === bet) || { allowed: true, reason: null };
   // When the limit or the balance drops, the selected bet follows (never silently above a limit).
   useEffect(() => {
@@ -296,9 +300,10 @@ export default function SlotsApp() {
   const identity = () => session.identity || user?.identity || 'guest';
   const fetchRounds = () => fetchPlayerRounds();
   // Opens the lock through the reveal and logs what the refused round would have shown and paid.
-  const openAndLog = async (entry, kind, reason, stake) => {
+  // `current` is the lock as the server holds it now (after a reload the lucky word may have changed).
+  const openAndLog = async (entry, kind, reason, stake, current = null) => {
     let swap;
-    try { swap = await revealAndRetireLock({ serverSeedHash: entry.serverSeedHash, clientSeed: entry.clientSeed, nonce: entry.nonce }); } catch (e) { swap = { ok: false, error: e.message }; }
+    try { swap = await revealAndRetireLock(current || { serverSeedHash: entry.serverSeedHash, clientSeed: entry.clientSeed, nonce: entry.nonce }); } catch (e) { swap = { ok: false, error: e.message }; }
     if (swap.fits && typeof swap.retired?.serverSeed === 'string') {
       let stops = null, won = null;
       try {
@@ -323,7 +328,9 @@ export default function SlotsApp() {
   };
   // The lock was used by a round this page did not make (another tab or device, or a server voiding the spin):
   // counted in the strict budget, the would-have round logged from the revealed key, then the new lock is taken.
-  const acceptOtherDeviceRound = async (hit, entry, stake) => {
+  // adopt: take the server's current lock afterwards. checkAlone: apply the "no other tab" rule (only right
+  // after the spin; after a reload the timing is no longer known).
+  const acceptOtherDeviceRound = async (hit, entry, stake, { adopt = true, checkAlone = true } = {}) => {
     const row = hit.round;
     const seedOk = typeof row.server_seed === 'string' && (await sha256Hex(row.server_seed)) === row.server_seed_hash;
     if (!seedOk) { stopForVerification('A spin played with this lock in another tab or on another device does not check out. Betting is stopped. Inspect the round before continuing.'); return false; }
@@ -332,15 +339,132 @@ export default function SlotsApp() {
     addRefusedSlotSpin({ lock: entry.serverSeedHash, stops, won, kind: 'other_device', reason: 'The lock was used by a spin this page did not make' });
     try { rememberRevealedSeed(row.server_seed_hash); } catch { /* storage full: the server never reuses a seed */ }
     forgetOpenLock(entry.serverSeedHash);
-    const alone = !otherTabRecently(session.tabId);
-    const r = recordRefusal('unpredicted');
-    if (r.reached) { stopForVerification(refusalStopMessage('unpredicted', r.count)); return false; }
-    try { await adoptCurrentLock(entry.serverSeedHash, entry.clientSeed); } catch (e) { setError(e.message); return false; }
-    session.refreshWallet();
+    const alone = checkAlone && !otherTabRecently(session.tabId);
+    if (!entry.counted) {
+      const r = recordRefusal('unpredicted');
+      if (r.reached) { stopForVerification(refusalStopMessage('unpredicted', r.count)); return false; }
+    }
+    if (adopt) {
+      try { await adoptCurrentLock(entry.serverSeedHash, entry.clientSeed); } catch (e) { setError(e.message); lockErrorRef.current = true; recoverLock(); return false; }
+      session.refreshWallet();
+    }
     const extra = slotWouldHaveText(stops, won);
     setNotice(`${alone ? OTHER_DEVICE_ALONE_MESSAGE : OTHER_DEVICE_MESSAGE}${extra ? ` ${extra}` : ''}`);
     return true;
   };
+  // ---- mount-time reconciliation (the roulette page's reloadCommitment and checkOpenLocks, for the slot) ----
+  // One saved open lock against the round history. 'settled': this page's own round, verified with the slot
+  // checker and cleared; 'other': used by a round this page did not make (counted); 'missing': no round uses
+  // it; 'unknown': the history could not be read; 'stopped': a check failed and betting is stopped.
+  const settleOpenLock = async (entry, rounds = null) => {
+    let list = rounds;
+    if (!list) { try { list = await fetchRounds(); } catch { return 'unknown'; } }
+    const hit = findRoundForLock(list, entry);
+    if (!hit) return 'missing';
+    if (!hit.own) return (await acceptOtherDeviceRound(hit, entry, readSlotReceipt(entry.requestId)?.stake ?? null, { adopt: false, checkAlone: false })) ? 'other' : 'stopped';
+    const swapped = ownRoundProblems(hit.round, entry);
+    if (swapped.length) { stopForVerification(`${OWN_ROUND_SWAPPED_MESSAGE} (${swapped.join(', ')})`); return 'stopped'; }
+    const round = slotRoundFromRow(hit.round);
+    if (round) {
+      // The slot's own check: the saved receipt (stake, mode, maths, randomness) plus the full recomputation.
+      const check = await checkSlotHistoryRound(round);
+      setLastRound(round); setLastReceipt(readSlotReceipt(entry.requestId)); setLastVerdict(check);
+      if (!check.ok) { setCommitment(null); stopForVerification(`${EARLIER_ROUND_FAILED_MESSAGE} (${check.problems.join(', ')})`); return 'stopped'; }
+      setNotice(`Your earlier spin went through and paid ${fmtMoney(round.totalPayoutCents)}. It was checked in your browser.`);
+    } else {
+      // Not a slot round after all (a roulette round on a lock this page sent a value for): only the roulette check applies.
+      const v = await verifyRevealedRound(hit.round);
+      if (!v.ok) { setCommitment(null); stopForVerification(`${EARLIER_ROUND_FAILED_MESSAGE} (${v.reason})`); return 'stopped'; }
+    }
+    try { rememberRevealedSeed(hit.round.server_seed_hash); } catch { /* storage full: the server never reuses a seed */ }
+    forgetOpenLock(entry.serverSeedHash);
+    return 'settled';
+  };
+  // Every saved slot lock of this player that is no longer the current lock: settled rounds are verified and
+  // cleared, a lock no round ever used is logged as never opened and counted (the server dropped a spin whose
+  // random value it had).
+  const checkOpenLocks = async (currentHash) => {
+    if (!currentHash || blockedRef.current) return;
+    const list = locksToCheck(identity(), currentHash, Date.now(), undefined, { game: 'godsofpower' });
+    if (!list.length) return;
+    let rounds;
+    try { rounds = await fetchRounds(); } catch { return; } // again on the next load or focus
+    let warn = false;
+    for (const entry of list) {
+      const result = await settleOpenLock(entry, rounds);
+      if (result === 'stopped') return;
+      if (result !== 'missing') continue;
+      forgetOpenLock(entry.serverSeedHash);
+      addRefusedSlotSpin({ lock: entry.serverSeedHash, stops: null, kind: 'never_opened', reason: 'The server never showed this key' });
+      warn = true;
+      if (!entry.counted) {
+        const r = recordRefusal('unpredicted');
+        if (r.reached) { stopForVerification(refusalStopMessage('unpredicted', r.count)); return; }
+      }
+    }
+    if (warn && !blockedRef.current) setNotice(NEVER_OPENED_MESSAGE);
+  };
+  checkOpenLocksRef.current = checkOpenLocks;
+  // Loads the current lock. `previousHash` is the lock a failed request left behind: a different lock is only
+  // taken when the old key was shown (a settled round in the history that checks out). A lock this page sent a
+  // random value for and that saw a refusal, or whose spin never got a reply, is retired through the reveal
+  // BEFORE it is accepted (the would-have round logged, counted once). Returns the accepted lock's hash, or
+  // null when betting was stopped. Throws when no lock could be accepted (the caller retries).
+  const loadCommitment = async (previousHash = null) => {
+    const r = await fetch(`${API}/fairness/commitment`);
+    const c = await r.json();
+    let revealed = []; try { revealed = readRevealedHashes(); } catch { revealed = []; }
+    if (!r.ok || !isCommitmentValid(c) || revealed.includes(c.serverSeedHash)) throw new Error(C.noLock);
+    if (!canAcceptReloadedLock(c, previousHash)) {
+      const prev = findOpenLock(previousHash, identity());
+      const result = prev ? await settleOpenLock(prev) : 'missing';
+      if (result === 'stopped') return null;
+      if (result !== 'settled' && result !== 'other') throw new Error(LOCK_CHANGED_MESSAGE);
+    }
+    const open = findOpenLock(c.serverSeedHash, identity());
+    if (open && mustRetireLock(open)) {
+      const swap = await openAndLog(open, 'lost', open.refused ? 'Refused before this page was reloaded' : 'The page closed before the reply',
+        readSlotReceipt(open.requestId)?.stake ?? null, { serverSeedHash: c.serverSeedHash, clientSeed: c.clientSeed, nonce: c.nonce });
+      if (swap.problem) { setCommitment(null); stopForVerification(swap.problem); return null; }
+      if (!swap.ok) throw new Error(LOCK_RECHECK_MESSAGE);
+      if (!open.counted) {
+        const counted = recordRefusal('unpredicted');
+        if (counted.reached) { setCommitment(null); stopForVerification(refusalStopMessage('unpredicted', counted.count)); return null; }
+      }
+      setCommitment(swap.commitment);
+      setNotice(`${LOST_REPLY_MESSAGE}${swap.wouldHave ? ` ${swap.wouldHave}` : ''}`);
+      session.refreshWallet();
+      return swap.commitment.serverSeedHash;
+    }
+    setCommitment(Object.freeze({ ...c }));
+    return c.serverSeedHash;
+  };
+  // Automatic recovery for every state that used to say "reload the page": the lock is loaded again and the
+  // open locks are checked, with a few spaced retries (and again on focus). Betting is blocked only by a failed
+  // check or a reached budget, never by a request that merely failed.
+  const RECOVER_DELAYS_MS = [2000, 5000, 10000, 20000];
+  const recoverLock = async (previousHash = null, attempt = 0) => {
+    if (blockedRef.current) return;
+    if (recoveringRef.current) { pendingHashRef.current = previousHash; return; }
+    recoveringRef.current = true; pendingHashRef.current = previousHash;
+    clearTimeout(recoverTimerRef.current);
+    try {
+      const hash = await loadCommitment(previousHash);
+      if (hash) {
+        pendingHashRef.current = null;
+        if (lockErrorRef.current) { lockErrorRef.current = false; setError(null); }
+        await checkOpenLocks(hash);
+      }
+    } catch (e) {
+      setCommitment(null);
+      lockErrorRef.current = true;
+      if (attempt < RECOVER_DELAYS_MS.length) {
+        setError(e.message);
+        recoverTimerRef.current = setTimeout(() => recoverRef.current?.(previousHash, attempt + 1), RECOVER_DELAYS_MS[attempt]);
+      } else setError(`${e.message} ${LOCK_CHECK_GAVE_UP_MESSAGE}`);
+    } finally { recoveringRef.current = false; }
+  };
+  recoverRef.current = recoverLock;
   // This browser's own round is in the history although its reply was lost: asking again with the byte-identical
   // body returns the server's cached reply, which is verified and presented like any other round (no reload).
   const settleFoundRound = async ({ hit, request, bodyText, entry, startedAt }) => {
@@ -354,7 +478,7 @@ export default function SlotsApp() {
     if (!verdict.ok) { setCommitment(null); stopForVerification(C.verificationFailed); return; }
     try { rememberRevealedSeed(hit.round.server_seed_hash); } catch { /* storage full */ }
     forgetOpenLock(entry.serverSeedHash);
-    try { await adoptCurrentLock(entry.serverSeedHash, entry.clientSeed); } catch (e) { setError(e.message); }
+    try { await adoptCurrentLock(entry.serverSeedHash, entry.clientSeed); } catch (e) { setError(e.message); lockErrorRef.current = true; recoverLock(); }
     session.refreshWallet();
     setNotice(`Your spin went through and paid ${fmtMoney(round.totalPayoutCents)}. It was checked in your browser.`);
   };
@@ -374,7 +498,12 @@ export default function SlotsApp() {
         setNotice(`${LOST_REPLY_MESSAGE}${swap.wouldHave ? ` ${swap.wouldHave}` : ''}`); session.refreshWallet(); return;
       }
       try { hit = findRoundForLock(await fetchRounds(), entry); } catch { hit = null; } // one last look: maybe it landed meanwhile
-      if (!hit) { settleReelsRef.current(); setCommitment(null); setNotice(LOST_REPLY_PAUSED_MESSAGE); return; }
+      if (!hit) {
+        // The lock could not be opened and no round used it: the lock is marked refused so the recovery retires it
+        // through the reveal before any lock is accepted again (or finds the round if it lands meanwhile).
+        settleReelsRef.current(); setCommitment(null); updateOpenLock(entry.serverSeedHash, { refused: true });
+        setNotice(LOST_REPLY_RECHECK_MESSAGE); recoverLock(entry.serverSeedHash); return;
+      }
     }
     setNotice(null);
     if (!hit.own) { settleReelsRef.current(); setCommitment(null); await acceptOtherDeviceRound(hit, entry, request.receipt.stake); return; }
@@ -398,7 +527,8 @@ export default function SlotsApp() {
       if (hit) { await acceptOtherDeviceRound(hit, entry, stake); return; }
       const r = recordRefusal('unpredicted'); updateOpenLock(entry.serverSeedHash, { counted: true });
       if (r.reached) { stopForVerification(refusalStopMessage('unpredicted', r.count)); return; }
-      setError(STALE_LOCK_MESSAGE);
+      // No round used the lock yet: the recovery keeps looking for it and only takes a new lock once the old key was shown.
+      setError(STALE_LOCK_RECHECK_MESSAGE); lockErrorRef.current = true; recoverLock(entry.serverSeedHash);
       return;
     }
     settleReelsRef.current(); setCommitment(null);
@@ -413,7 +543,8 @@ export default function SlotsApp() {
     }
     session.refreshWallet();
     if (kind === 'auth') { setError(SIGN_IN_EXPIRED_MESSAGE); return; }
-    if (!swap.ok) { setError(`${reason ? `${reason.replace(/[.!?]?$/, '.')} ` : ''}${REFUSAL_NO_LOCK_MESSAGE}`); return; }
+    // The reveal failed (the lock is marked refused): the recovery retires it before any lock is accepted again.
+    if (!swap.ok) { setError(`${reason ? `${reason.replace(/[.!?]?$/, '.')} ` : ''}${LOCK_RECHECK_MESSAGE}`); lockErrorRef.current = true; recoverLock(entry.serverSeedHash); return; }
     if (kind === 'table_changed') { loadConfig(); setNotice(C.tableChanged); return; }
     if (kind === 'other_tab_unseen') { setError(`${OTHER_TAB_UNSEEN_MESSAGE}${wouldHave ? ` ${wouldHave}` : ''}`); return; }
     if (kind === 'transient') { setError(`The game is busy for a moment${reason && reason !== 'internal error' ? ` (${reason.replace(/[.!?]$/, '')})` : ''}. Your bet was not taken.${wouldHave ? ` ${wouldHave}` : ''} Please try again.`); return; }
@@ -452,7 +583,7 @@ export default function SlotsApp() {
     try {
       request = createSlotRequest(c, bet, mode, { balanceBefore: balance }); saveSlotReceipt(request.receipt);
       // ...and the lock with the random value about to be sent, so it is checked even if this page closes.
-      entry = rememberOpenLock({ identity: identity(), serverSeedHash: c.serverSeedHash, clientSeed: c.clientSeed, nonce: c.nonce, clientEntropy: request.body.clientEntropy, requestId: request.receipt.requestId });
+      entry = rememberOpenLock({ identity: identity(), serverSeedHash: c.serverSeedHash, clientSeed: c.clientSeed, nonce: c.nonce, clientEntropy: request.body.clientEntropy, requestId: request.receipt.requestId, game: 'godsofpower' });
     } catch (e) { setError(e.message); stopAuto(); return; }
     setError(null); setNotice(null);
     setPhase('spinning'); setCommittedStake(bet); setBanner(null); setCelebration(null); setDoor(false);
@@ -460,6 +591,9 @@ export default function SlotsApp() {
     setSpinKey((k) => k + 1); setReelStates(Array(SLOT_MATH.reels).fill('spinning'));
     sfx.spinLoopStart();
     guard.announce();
+    // Play signals for the other-tab check: this tab's play stamp (heartbeat) and its last posted spin (session).
+    notePlay(session.tabId);
+    const ownSpin = noteSpinPosted('godsofpower');
     const startedAt = performance.now();
     settleReelsRef.current = () => { setReelStates(ALL_STOPPED); sfx.spinLoopStop(); setCommittedStake(0); setPhase('idle'); };
     const bodyText = JSON.stringify(request.body);
@@ -472,9 +606,10 @@ export default function SlotsApp() {
     if (!resp.ok) {
       stopAuto();
       const reason = typeof data?.error === 'string' ? data.error : '';
-      // A 409 other_tab is only predicted when THIS browser saw another tab play just now (BroadcastChannel or
-      // heartbeat); on the server's word alone it is counted and the lock retired, like any other refusal.
-      const otherTabSeen = otherTabSeenRecently({ lastForeignAt: guard.foreignAt(), otherTabRecently: (now, w) => otherTabRecently(session.tabId, now, undefined, w) });
+      // A 409 other_tab is only predicted on a PLAY signal this browser has itself: another tab announced a spin
+      // (BroadcastChannel), another tab's play stamp in the heartbeat, or this very tab posted a spin on the other
+      // game just now. On the server's word alone it is counted and the lock retired, like any other refusal.
+      const otherTabSeen = otherTabSeenRecently({ lastForeignAt: guard.foreignAt(), ownSpin, game: 'godsofpower', otherTabRecently: (now, w) => otherTabPlayedRecently(session.tabId, now, undefined, w) });
       const kind = classifySpinRefusal(resp.status, reason, data?.code, { otherTabSeen });
       await handleRefusal({ kind, reason, code: data?.code, entry, request, bodyText, startedAt });
       return;

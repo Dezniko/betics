@@ -74,10 +74,14 @@ export const NOT_ENOUGH_BALANCE_MESSAGE = 'Not enough balance for that bet.';
 
 // Every bet level with whether it may be played now and, if not, the one-line reason shown on tap.
 // tableLimit = the live max win (reserve.maxWinUnits); a level is allowed only when cap x level fits it.
-export function betLevelStates({ levels = BET_LEVELS, tableLimit = null, balance = null, minStakeCents = null, maxStakeCents = null, math = SLOT_MATH } = {}) {
+// maxHouseLossCents = the house loss cap from the public config; a level is allowed only when its biggest
+// possible loss for the house (cap x level - level) fits it, the same test the server makes (max_loss).
+export const HOUSE_LOSS_LIMIT_MESSAGE = 'This bet is over the table limit. Lower the bet.';
+export function betLevelStates({ levels = BET_LEVELS, tableLimit = null, balance = null, minStakeCents = null, maxStakeCents = null, maxHouseLossCents = null, math = SLOT_MATH } = {}) {
   return levels.map((stake) => {
     let reason = null;
     if (Number.isSafeInteger(tableLimit) && tableLimit > 0 && maxPayoutUnits(stake, math) > tableLimit) reason = slotTableLimitMessage(tableLimit, math);
+    else if (Number.isSafeInteger(maxHouseLossCents) && maxHouseLossCents > 0 && maxPayoutUnits(stake, math) - stake > maxHouseLossCents) reason = HOUSE_LOSS_LIMIT_MESSAGE;
     else if (Number.isSafeInteger(maxStakeCents) && maxStakeCents > 0 && stake > maxStakeCents) reason = `The bet can be at most ${fmtMoney(maxStakeCents)}.`;
     else if (Number.isSafeInteger(minStakeCents) && stake < minStakeCents) reason = `The bet must be at least ${fmtMoney(minStakeCents)}.`;
     else if (Number.isSafeInteger(balance) && stake > balance) reason = NOT_ENOUGH_BALANCE_MESSAGE;

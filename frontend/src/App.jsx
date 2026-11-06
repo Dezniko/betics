@@ -25,8 +25,8 @@ import { topUpState, DEPOSIT_PAUSED_MESSAGE, DEPOSITS_CLOSED_MESSAGE, OFFICIAL_T
 import { classifySpinRefusal, budgetFor, recordRefusal, refusalStopMessage, refusalRetiredMessage, rememberOpenLock, updateOpenLock, forgetOpenLock, findOpenLock, mustRetireLock, locksToCheck, findRoundForLock,
   addRefusedSpin, readRefusedLog, canAcceptReloadedLock, isBalanceResync, OPEN_LOCK_GRACE_MS, REFUSAL_NO_LOCK_MESSAGE, SIGN_IN_EXPIRED_MESSAGE, TABLE_CHANGED_MESSAGE, LOST_REPLY_MESSAGE,
   LOST_REPLY_PAUSED_MESSAGE, OTHER_DEVICE_MESSAGE, OTHER_DEVICE_ALONE_MESSAGE, OWN_ROUND_SWAPPED_MESSAGE, STALE_LOCK_MESSAGE, NEVER_OPENED_MESSAGE, ownRoundProblems, wouldHaveWon, wouldHaveText,
-  BALANCE_RESYNC_MESSAGE, shortCreditMessage, postJsonWithTimeout, checkRefusalAgainstKnown, OTHER_TAB_MESSAGE, OTHER_TAB_UNSEEN_MESSAGE, otherTabSeenRecently, waitForRoundWithLock } from './spinRefusal.js';
-import { startPresence, otherTabRecently, tabIdFor } from './tabPresence.js';
+  BALANCE_RESYNC_MESSAGE, shortCreditMessage, postJsonWithTimeout, checkRefusalAgainstKnown, OTHER_TAB_MESSAGE, OTHER_TAB_UNSEEN_MESSAGE, otherTabSeenRecently, waitForRoundWithLock, roundGame, noteSpinPosted } from './spinRefusal.js';
+import { startPresence, otherTabRecently, otherTabPlayedRecently, notePlay, tabIdFor } from './tabPresence.js';
 import WinCelebration from './WinCelebration.jsx';
 import FairnessSheet, { FairFlow, RefusedSpins } from './FairnessSheet.jsx';
 import { chefLockUrl } from './fairnessLinks.js';
@@ -262,10 +262,11 @@ export default function App() {
   // Locks whose random value was sent but whose key this browser never checked (page closed, a
   // refusal whose lock could not be opened, a lock the server swapped). Each one is looked up in the
   // round history: a settled round is verified and cleared, a missing one counts as an unexpected
-  // refusal and the player is told.
+  // refusal and the player is told. Only roulette's own entries: the slot page checks its own with
+  // its own verifier (a slot round has no pocket, so the roulette check would wrongly fail it).
   const checkOpenLocks = async (identity, currentHash) => {
     if (!currentHash || verificationBlockedRef.current) return;
-    const list = locksToCheck(identity, currentHash);
+    const list = locksToCheck(identity, currentHash, Date.now(), undefined, { game: 'roulette' });
     if (!list.length) return;
     let rounds;
     try { rounds = await fetchRounds(); } catch { return; } // try again on the next load
@@ -283,6 +284,13 @@ export default function App() {
         // were sent, and pay what the saved pre-bet receipt says.
         const swapped = ownRoundProblems(hit.round, entry);
         if (swapped.length) { stopForVerification(`${OWN_ROUND_SWAPPED_MESSAGE} (${swapped.join(', ')})`); return; }
+        if (roundGame(hit.round) !== 'roulette') {
+          // An entry from before game tags whose round is the slot's: not a roulette round, so the slot
+          // page's checker (its history check) judges it; here it is only cleared.
+          try { rememberRevealedSeed(hit.round.server_seed_hash); } catch { /* storage full */ }
+          forgetOpenLock(entry.serverSeedHash);
+          continue;
+        }
         const v = await verifyRevealedRound(hit.round);
         if (!v.ok) { stopForVerification(`An earlier spin does not check out (${v.reason}). Betting is stopped. Inspect the round before continuing.`); return; }
         const receipt = readRoundReceipt(entry.requestId, hit.round.id);
@@ -984,7 +992,9 @@ export default function App() {
   // adopt: take the server's current lock afterwards. checkAlone: apply the "no other tab" rule (only
   // right after the spin; after a reload the timing is no longer known).
   const acceptOtherDeviceRound = async (round, entry, terms = null, { adopt = true, checkAlone = true } = {}) => {
-    const v = await verifyRevealedRound(round);
+    // A slot round on this lock (the player's other game, another device) has no pocket: only the key is checked.
+    const v = roundGame(round) === 'roulette' ? await verifyRevealedRound(round)
+      : { ok: typeof round.server_seed === 'string' && await sha256Hex(round.server_seed) === round.server_seed_hash, reason: 'key does not fit the lock' };
     if (!v.ok) { stopForVerification(`A spin played with this lock in another tab or on another device does not check out (${v.reason}). Betting is stopped. Inspect the round before continuing.`); return false; }
     let pocket = null;
     try { pocket = await pocketFor({ serverSeed: round.server_seed, clientSeed: `${entry.clientSeed}:${entry.clientEntropy}`, nonce: entry.nonce, max: 37 }); } catch { pocket = null; }
@@ -1175,6 +1185,9 @@ export default function App() {
       const bodyText = JSON.stringify({ ...request.body, mode, ...(mathId ? { mathId } : {}) });
       sent = true; // from here the server has seen this lock's random value
       guard.announce();
+      // Play signals for the other-tab check: this tab's play stamp (heartbeat) and its last posted spin (session).
+      notePlay(presenceRef.current?.id ?? null);
+      const ownSpin = noteSpinPosted('roulette');
       // Timed out after SPIN_TIMEOUT_MS: handled as a lost reply, the lock stays in the open locks list.
       const { resp, data } = await postJsonWithTimeout(`${API}/games/roulette/spin`, bodyText);
       if (!resp || (resp.ok && !data)) { // no usable reply: a network blip, not a fairness alert
@@ -1185,9 +1198,10 @@ export default function App() {
       if (!resp.ok) {
         stopAuto();
         const reason = typeof data?.error === 'string' ? data.error : '';
-        // A 409 other_tab is only predicted when THIS browser saw another tab play just now (BroadcastChannel
-        // or heartbeat); on the server's word alone it is counted and the lock retired, like any other refusal.
-        const otherTabSeen = otherTabSeenRecently({ lastForeignAt: guard.foreignAt(), otherTabRecently: (now, w) => otherTabRecently(presenceRef.current?.id ?? null, now, undefined, w) });
+        // A 409 other_tab is only predicted on a PLAY signal this browser has itself: another tab announced a
+        // spin (BroadcastChannel), another tab's play stamp in the heartbeat, or this very tab posted a spin on
+        // the other game just now. On the server's word alone it is counted and the lock retired.
+        const otherTabSeen = otherTabSeenRecently({ lastForeignAt: guard.foreignAt(), ownSpin, game: 'roulette', otherTabRecently: (now, w) => otherTabPlayedRecently(presenceRef.current?.id ?? null, now, undefined, w) });
         const first = classifySpinRefusal(resp.status, reason, data?.code, { otherTabSeen });
         // The server alone does not decide a refusal was expected: the page's own figures are checked.
         const known = { balance: balanceBefore, stake, worstPayout: maxPayoutUnits(sentBets), minStake: gameConfig?.minStakeCents,

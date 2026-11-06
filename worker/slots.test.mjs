@@ -137,7 +137,12 @@ test('config: the slot game loads, its public config carries the published maths
     assert.equal(pub.math.strips.length, 5);
     const r = await p.call('/api/games/godsofpower/config', { cookie: await p.guest() });
     assert.equal(r.status, 200); assert.equal(r.data.math.capMultiplier, 2000);
-    assert.equal((await p.call('/api/games/roulette/config', { cookie: await p.guest() })).data.math.id, 'standard', 'roulette config unchanged');
+    assert.equal(r.data.maxHouseLossCents, cfg.maxHouseLossCents, 'the slot public config carries the house loss cap');
+    assert.ok(Number.isSafeInteger(r.data.maxHouseLossCents) && r.data.maxHouseLossCents > 0);
+    assert.equal(pub.maxHouseLossCents, cfg.maxHouseLossCents);
+    const roulettePub = (await p.call('/api/games/roulette/config', { cookie: await p.guest() })).data;
+    assert.equal(roulettePub.math.id, 'standard', 'roulette config unchanged');
+    assert.equal('maxHouseLossCents' in roulettePub, false, 'roulette public config unchanged');
     assert.equal(checkSlotLimits(2000, cfg), null);
     assert.equal(checkSlotLimits(2001, cfg).code, 'bad_stake');
     assert.equal(checkSlotLimits(100, cfg).code, 'bad_stake');

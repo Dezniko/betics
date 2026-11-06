@@ -105,7 +105,9 @@ export function publicConfig(config) {
     minStakeCents: config.minStakeCents, maxStakeCents: config.maxStakeCents, maxWinCents: config.maxWinCents, currency: config.currency };
   if (config.gameId === 'godsofpower') {
     const m = SLOT_MATH;
-    return { ...head, math: { id: m.id, label: m.label, rtp: m.rtp, reels: m.reels, rows: m.rows, lineCount: m.lineCount, betLevels: m.betLevels,
+    // maxHouseLossCents is public for the slot: the page greys out the bet levels the house loss cap refuses
+    // (stake x (cap - 1) over the cap), so a max_loss refusal is never needed after the random value was sent.
+    return { ...head, maxHouseLossCents: config.maxHouseLossCents, math: { id: m.id, label: m.label, rtp: m.rtp, reels: m.reels, rows: m.rows, lineCount: m.lineCount, betLevels: m.betLevels,
       symbols: m.symbols, lines: m.lines, strips: m.strips, pays: m.pays, scatterPays: m.scatterPays, freeSpins: m.freeSpins, capMultiplier: m.capMultiplier } };
   }
   const math = mathOption(config.mathId);

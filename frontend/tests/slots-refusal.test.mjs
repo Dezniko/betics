@@ -199,7 +199,7 @@ test('SlotsApp saves the open lock before posting, retires it on refusals and lo
   assert.match(spin, /await handleRefusal\(\{ kind, reason, code: data\?\.code, entry, request, bodyText, startedAt \}\);/);
   assert.ok(!/C\.lostReply\b/.test(spin), 'no "reload the page" message for a lost reply any more');
   const open = slice(slot, 'const openAndLog = async', 'const adoptCurrentLock = async');
-  assert.match(open, /revealAndRetireLock\(\{ serverSeedHash: entry\.serverSeedHash, clientSeed: entry\.clientSeed, nonce: entry\.nonce \}\)/, 'retired through the reveal with the saved lock');
+  assert.match(open, /revealAndRetireLock\(current \|\| \{ serverSeedHash: entry\.serverSeedHash, clientSeed: entry\.clientSeed, nonce: entry\.nonce \}\)/, 'retired through the reveal with the saved lock (or the server\'s current form of it after a reload)');
   assert.match(open, /recomputeSlotRound\(\{ serverSeed: swap\.retired\.serverSeed, clientSeed: `\$\{entry\.clientSeed\}:\$\{entry\.clientEntropy\}`, nonce: entry\.nonce, stake \}\)/, 'the would-have round from the revealed key and the saved randomness');
   assert.match(open, /addRefusedSlotSpin\(\{ lock: entry\.serverSeedHash, stops, won, kind, reason \}\)/);
   const handler = slice(slot, 'const handleRefusal = async', 'const processReply = async');

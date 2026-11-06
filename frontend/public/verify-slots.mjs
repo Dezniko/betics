@@ -143,20 +143,25 @@ export function verifyProof(input) {
     round.spins.forEach((s, i) => {
       const d = spins[i]; if (!d) return;
       if (JSON.stringify(s.stops) !== JSON.stringify(d.stops)) problems.push(`Spin ${i + 1}: reel stops differ.`);
+      // The recorded picture (when the proof carries one) must be the one the stops give: a grid that disagrees
+      // with its own stops is a doctored display, even when the stops and the win are right.
+      if (d.grid !== undefined && JSON.stringify(d.grid) !== JSON.stringify(gridFor(s.stops, MATH))) problems.push(`Spin ${i + 1}: the recorded picture differs from the one the reel stops give.`);
       if (s.winUnits !== d.winUnits) problems.push(`Spin ${i + 1}: win differs (${d.winUnits} recorded, ${s.winUnits} from the seed).`);
     });
     if (round.totalPayoutUnits !== proof.totalPayoutCents) problems.push(`Total payout differs (${proof.totalPayoutCents} recorded, ${round.totalPayoutUnits} from the seed).`);
     if (Number.isSafeInteger(proof.balanceBeforeCents) && Number.isSafeInteger(proof.balanceAfterCents)
       && proof.balanceAfterCents !== proof.balanceBeforeCents - proof.stake + proof.totalPayoutCents) problems.push('The balance after the round does not add up.');
   }
-  return { ok: problems.length === 0, problems, round };
+  return { ok: problems.length === 0, problems, round, expectedChecked: !!(e && typeof e === 'object') };
 }
+
+export const NO_EXPECTED_WARNING = 'WARNING: this proof has no "expected" block (the lock, lucky word, randomness, stake, mode and maths saved before the bet), so the pre-bet lock was NOT checked. This only shows the round is consistent with the revealed seed.';
 
 function main() {
   const file = process.argv[2];
   if (!file) { console.error('Usage: node verify-slots.mjs round-proof.json'); process.exit(2); }
   const r = verifyProof(JSON.parse(readFileSync(file, 'utf8')));
-  if (r.ok) { console.log(`OK: ${r.round.spins.length} spin(s), total payout ${r.round.totalPayoutUnits} units, lock opened by the revealed seed.`); process.exit(0); }
-  console.log('MISMATCH'); for (const p of r.problems) console.log(' - ' + p); process.exit(1);
+  if (r.ok) { console.log(`OK: ${r.round.spins.length} spin(s), total payout ${r.round.totalPayoutUnits} units, lock opened by the revealed seed.`); if (!r.expectedChecked) console.log(NO_EXPECTED_WARNING); process.exit(0); }
+  console.log('MISMATCH'); for (const p of r.problems) console.log(' - ' + p); if (!r.expectedChecked) console.log(NO_EXPECTED_WARNING); process.exit(1);
 }
 try { if (realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) main(); } catch { /* imported as a module */ }

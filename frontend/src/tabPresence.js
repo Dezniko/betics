@@ -1,7 +1,9 @@
-// Which tabs of this game are open in this browser. Each tab writes a heartbeat into localStorage
+// Which tabs of the games are open in this browser. Each tab writes a heartbeat into localStorage
 // every few seconds. When the server says the lock was used by a spin this page did not make, the
 // game asks whether any other tab was alive recently: if not, that "other spin" could only have come
 // from another device, or from the server itself.
+// Each entry also keeps when that tab last POSTED a spin (`p`, notePlay). A 409 other_tab is only
+// believed on a PLAY signal: a tab that merely exists (heartbeat only) never explains a refusal.
 const KEY = 'betics:tabs:v2';
 const SESSION_KEY = 'betics:tab-id:v1';
 export const HEARTBEAT_MS = 5 * 1000;
@@ -15,7 +17,7 @@ function read(storage) {
     const m = JSON.parse(storage?.getItem(KEY) || '{}');
     if (!m || typeof m !== 'object' || Array.isArray(m)) return {};
     const out = {};
-    for (const [k, v] of Object.entries(m)) if (v && Number.isFinite(v.t)) out[k] = { t: v.t, c: v.c === true };
+    for (const [k, v] of Object.entries(m)) if (v && Number.isFinite(v.t)) out[k] = { t: v.t, c: v.c === true, ...(Number.isFinite(v.p) ? { p: v.p } : {}) };
     return out;
   } catch { return {}; }
 }
@@ -28,9 +30,23 @@ export function newTabId() {
 // Records this tab as alive and drops tabs not seen for a while.
 export function beat(id, now = Date.now(), storage = local(), closed = false) {
   const next = {};
-  for (const [k, v] of Object.entries(read(storage))) if (now - v.t < OTHER_TAB_WINDOW_MS && v.t <= now + 60000) next[k] = v;
-  next[id] = { t: now, c: closed };
+  const all = read(storage);
+  for (const [k, v] of Object.entries(all)) if (now - v.t < OTHER_TAB_WINDOW_MS && v.t <= now + 60000) next[k] = v;
+  const p = all[id]?.p; // the liveness beat never touches the play stamp
+  next[id] = { t: now, c: closed, ...(Number.isFinite(p) ? { p } : {}) };
   write(storage, Object.fromEntries(Object.entries(next).sort((a, b) => b[1].t - a[1].t).slice(0, MAX_TABS)));
+}
+// Records that this tab is posting a spin right now: the play signal other tabs look for.
+export function notePlay(id, now = Date.now(), storage = local()) {
+  if (!id) return;
+  beat(id, now, storage);
+  const m = read(storage);
+  if (m[id]) { m[id] = { ...m[id], p: now }; write(storage, m); }
+}
+// True when another tab POSTED a spin within the window: the only heartbeat fact that explains a 409
+// other_tab. A tab that is merely open (liveness beats only) does not count.
+export function otherTabPlayedRecently(id, now = Date.now(), storage = local(), windowMs = OTHER_TAB_WINDOW_MS) {
+  return Object.entries(read(storage)).some(([k, v]) => k !== id && Number.isFinite(v.p) && now - v.p <= windowMs && v.p <= now + 60000);
 }
 // True when another tab of this game was alive within the window. A tab that was closed still
 // counts until the window ends, because it may have spun on the lock just before it closed.
