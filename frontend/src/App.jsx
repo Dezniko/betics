@@ -25,14 +25,14 @@ import { topUpState, DEPOSIT_PAUSED_MESSAGE, DEPOSITS_CLOSED_MESSAGE, OFFICIAL_T
 import { classifySpinRefusal, budgetFor, recordRefusal, refusalStopMessage, refusalRetiredMessage, rememberOpenLock, updateOpenLock, forgetOpenLock, findOpenLock, mustRetireLock, locksToCheck, findRoundForLock,
   addRefusedSpin, readRefusedLog, canAcceptReloadedLock, isBalanceResync, OPEN_LOCK_GRACE_MS, REFUSAL_NO_LOCK_MESSAGE, SIGN_IN_EXPIRED_MESSAGE, TABLE_CHANGED_MESSAGE, LOST_REPLY_MESSAGE,
   LOST_REPLY_PAUSED_MESSAGE, OTHER_DEVICE_MESSAGE, OTHER_DEVICE_ALONE_MESSAGE, OWN_ROUND_SWAPPED_MESSAGE, STALE_LOCK_MESSAGE, NEVER_OPENED_MESSAGE, ownRoundProblems, wouldHaveWon, wouldHaveText,
-  BALANCE_RESYNC_MESSAGE, shortCreditMessage, postJsonWithTimeout, checkRefusalAgainstKnown, OTHER_TAB_MESSAGE } from './spinRefusal.js';
+  BALANCE_RESYNC_MESSAGE, shortCreditMessage, postJsonWithTimeout, checkRefusalAgainstKnown, OTHER_TAB_MESSAGE, OTHER_TAB_UNSEEN_MESSAGE, otherTabSeenRecently, waitForRoundWithLock } from './spinRefusal.js';
 import { startPresence, otherTabRecently, tabIdFor } from './tabPresence.js';
 import WinCelebration from './WinCelebration.jsx';
 import FairnessSheet, { FairFlow, RefusedSpins } from './FairnessSheet.jsx';
 import { chefLockUrl } from './fairnessLinks.js';
 import { winTier, celebrationTiming } from './winCelebration.js';
 import { ensureAudioContext, playLose, playChaChing, playCountTick, playChip, playChipSelect, playChipRemove, playDeny } from './sound.js';
-import { verifyOutcomeClientSide, verifySettlement, combineVerification, settlementFromRound, withoutBalance, settlementForProof, standaloneVerifyScript, isCommitmentValid, canStartRound, createRoundRequest, saveRoundReceipt, readRoundReceipt, readRevealedHashes, rememberRevealedSeed, isNextCommitmentSafe, sha256Hex, pocketFor, verifyRevealedRound } from './fairnessClient.js';
+import { verifyOutcomeClientSide, verifySettlement, combineVerification, settlementFromRound, withoutBalance, settlementForProof, standaloneVerifyScript, isCommitmentValid, canStartRound, createRoundRequest, saveRoundReceipt, readRoundReceipt, readRevealedHashes, rememberRevealedSeed, isNextCommitmentSafe, sha256Hex, pocketFor, verifyRevealedRound, revealAndRetireLock, fetchPlayerRounds } from './fairnessClient.js';
 import { playVoice, playNumberCallout, prepareNumberCallout, setBettingOpen } from './voice.js';
 import { didBetWin, payoutCentsFor, betLabel, coveredNumbers, pocketColor, setPayoutTable, maxPayoutUnits, straightMultiplier, checkPayoutTable, isTableConfirmed, confirmTable, describeTableDifferences } from './rouletteRules.js';
 import { displayedBalanceCents, tableFitsBalance } from './balanceDisplay.js';
@@ -43,10 +43,9 @@ const fmt = fmtMoney; // 1,234.50 TICS
 const readStore = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
 const writeStore = (k, v) => { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch { /* private mode */ } };
 const local = () => { try { return localStorage; } catch { return null; } };
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const WALLET_STALE_MS = 10000; // older than this, the balance is fetched again right before a spin
 const LOST_REPLY_WAIT_MS = 20000; // how long a spin with no reply is looked for in the round history
-const LOST_REPLY_POLL_MS = 2000;
+const LOST_REPLY_POLL_MS = 2000;  // (the shared waitForRoundWithLock in spinRefusal.js does the polling)
 let walletModule = null; // lazily imported wallet bundle (wagmi + viem + AppKit)
 const loadWalletModule = () => (walletModule ||= import('./walletConnect.js'));
 
@@ -199,25 +198,10 @@ export default function App() {
   // after a refused spin and for a lock that saw a refused spin before a reload.
   // Returns { ok, commitment, retired, fits, problem } where problem means "stop betting".
   const retireLock = async (expectedCommitment) => {
-    const resp = await fetch(`${API}/fairness/rotate`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ expectedCommitment }),
-    });
-    let data = {};
-    try { data = await resp.json(); } catch { data = {}; }
-    if (!resp.ok || !isCommitmentValid(data.commitment)) return { ok: false, error: data.error || 'A new lock could not be made.' };
-    const fits = typeof data.retired?.serverSeed === 'string' && await sha256Hex(data.retired.serverSeed) === expectedCommitment.serverSeedHash
-      && data.retired.serverSeedHash === expectedCommitment.serverSeedHash;
-    if (/^[a-f0-9]{64}$/.test(data.retired?.serverSeedHash || '')) rememberRevealedSeed(data.retired.serverSeedHash); // a retired lock must never come back
-    setRetiredLock({ ...data.retired, fits });
-    // The new lock is only accepted when the old key fits the old lock and the new lock is fresh,
-    // with the same lucky word and a nonce of 0. Anything else stops betting.
-    const fresh = isNextCommitmentSafe(data.commitment, { serverSeedHash: expectedCommitment.serverSeedHash, clientSeedBase: expectedCommitment.clientSeed }, readRevealedHashes());
-    if (!fits) return { ok: false, problem: 'The old key the server revealed does not fit the old lock. Betting is stopped. Inspect the proof before continuing.' };
-    if (!fresh) return { ok: false, problem: 'The new lock from the server is not a fresh lock. Betting is stopped. Inspect the proof before continuing.', retired: data.retired, fits };
-    forgetOpenLock(expectedCommitment.serverSeedHash);
-    return { ok: true, commitment: Object.freeze({ ...data.commitment }), retired: data.retired, fits };
+    const swap = await revealAndRetireLock(expectedCommitment);
+    if (swap.retired) setRetiredLock({ ...swap.retired, fits: swap.fits });
+    if (swap.ok) forgetOpenLock(expectedCommitment.serverSeedHash);
+    return swap;
   };
 
   // Opens a lock whose random value was sent (refused spin, lost reply, reload) through the reveal,
@@ -251,12 +235,7 @@ export default function App() {
     setClientSeedDraft(c.clientSeed);
   };
 
-  const fetchRounds = async () => {
-    const r = await fetch(`${API}/rounds`);
-    if (!r.ok) throw new Error('The round history could not be loaded.');
-    const rows = await r.json();
-    return Array.isArray(rows) ? rows : [];
-  };
+  const fetchRounds = () => fetchPlayerRounds();
 
   // Another device or tab may have used this lock while this page sat idle. No bet of ours was on it (our
   // random value for it was never sent), so the server learned nothing from us: when the history shows the
@@ -1066,12 +1045,7 @@ export default function App() {
   // opened through the reveal (so the spin can never land later) and the player goes on.
   const recoverLostReply = async ({ entry, request, bodyText }) => {
     setNotice('The connection dropped. Checking whether your spin went through...');
-    let hit = null;
-    const deadline = Date.now() + LOST_REPLY_WAIT_MS;
-    while (!hit && Date.now() < deadline) {
-      await sleep(LOST_REPLY_POLL_MS);
-      try { hit = findRoundForLock(await fetchRounds(), entry); } catch { /* still offline */ }
-    }
+    let hit = await waitForRoundWithLock(entry, fetchRounds, { waitMs: LOST_REPLY_WAIT_MS, pollMs: LOST_REPLY_POLL_MS });
     if (!hit) {
       const swap = await openAndLog(entry, 'lost', 'The connection dropped before the reply', null, request.expected.terms);
       if (swap.problem) { endSpinWithoutResult(); setNotice(null); setCommitment(null); stopForVerification(swap.problem); return; }
@@ -1135,6 +1109,7 @@ export default function App() {
       setError(TABLE_CHANGED_MESSAGE);
       return;
     }
+    if (kind === 'other_tab_unseen') { setError(`${OTHER_TAB_UNSEEN_MESSAGE}${wouldHave ? ` ${wouldHave}` : ''}`); return; }
     if (kind === 'transient') { setError(`The game is busy for a moment${reason && reason !== 'internal error' ? ` (${reason.replace(/[.!?]$/, '')})` : ''}. Your bet was not taken.${wouldHave ? ` ${wouldHave}` : ''} Please try again.`); return; }
     if (kind === 'predicted') {
       // Limits, balance, mode and pause switches the page already knows about: the server's reason.
@@ -1210,7 +1185,10 @@ export default function App() {
       if (!resp.ok) {
         stopAuto();
         const reason = typeof data?.error === 'string' ? data.error : '';
-        const first = classifySpinRefusal(resp.status, reason, data?.code);
+        // A 409 other_tab is only predicted when THIS browser saw another tab play just now (BroadcastChannel
+        // or heartbeat); on the server's word alone it is counted and the lock retired, like any other refusal.
+        const otherTabSeen = otherTabSeenRecently({ lastForeignAt: guard.foreignAt(), otherTabRecently: (now, w) => otherTabRecently(presenceRef.current?.id ?? null, now, undefined, w) });
+        const first = classifySpinRefusal(resp.status, reason, data?.code, { otherTabSeen });
         // The server alone does not decide a refusal was expected: the page's own figures are checked.
         const known = { balance: balanceBefore, stake, worstPayout: maxPayoutUnits(sentBets), minStake: gameConfig?.minStakeCents,
           maxStake: gameConfig?.maxStakeCents, maxWin: gameConfig?.maxWinCents, tableLimit };

@@ -15,7 +15,7 @@ export function slotRoundFromRow(row) {
   const clientSeedBase = row.client_seed_base ?? null, clientEntropy = row.client_entropy ?? null;
   return {
     roundId: row.id, requestId: row.request_id ?? null, at: row.created_at || null,
-    mode: row.real_money ? 'real' : 'demo',
+    mode: row.real_money ? 'real' : 'demo', mathId: row.math_id ?? null,
     stake: row.stake_cents, totalPayoutCents: row.payout_cents || 0,
     spins: outcome.spins, freeSpinsAwarded: outcome.freeSpinsAwarded || 0, freeSpinsPlayed: outcome.freeSpinsPlayed || 0, capped: !!outcome.capped,
     fairness: { serverSeed: row.server_seed, serverSeedHash: row.server_seed_hash, clientSeed: row.client_seed, clientSeedBase, clientEntropy, nonce: row.nonce },
@@ -32,8 +32,15 @@ export function slotHistoryRows(rows, limit = 15) {
 // only the reveal itself is checked: the missing-receipt note is not a failure then.
 export const NO_RECEIPT = 'No pre-bet receipt was saved for this spin.';
 export async function checkSlotHistoryRound(round, { read = readSlotReceipt, verify = verifySlotRound } = {}) {
-  const receipt = round.requestId ? read(round.requestId) : null;
+  const saved = round.requestId ? read(round.requestId) : null;
+  // A history row has no ending balance, so the balance pinned in the receipt is not part of this check.
+  const receipt = saved ? withoutSlotBalance(saved) : null;
   const verdict = await verify(receipt || null, round);
   const problems = (verdict.problems || []).filter((p) => receipt || p !== NO_RECEIPT);
   return { ok: problems.length === 0, problems, receipt: !!receipt };
+}
+export function withoutSlotBalance(receipt) {
+  if (!receipt) return receipt;
+  const { balanceBefore: _unused, ...rest } = receipt;
+  return rest;
 }

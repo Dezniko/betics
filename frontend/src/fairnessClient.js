@@ -264,3 +264,38 @@ export function standaloneVerifyScript() {
   // Data is downloaded separately as JSON, never interpolated into shell/code.
   return 'node verify-roulette.mjs round-proof.json';
 }
+
+// ---- the reveal path, shared by roulette and the slot ----
+// Swaps a lock for a fresh one through POST /api/fairness/rotate: the server shows the old key, this
+// browser checks it fits the old lock (sha256(key) == lock), remembers the retired fingerprint so the
+// lock can never come back, and only accepts the new lock when it is fresh (same lucky word, nonce 0,
+// never revealed). Used by "Get a new lock", after a refused spin and after a lost reply.
+// Returns { ok, commitment, retired, fits, problem?, error? }; `problem` means "stop betting".
+export const RETIRED_KEY_MISFIT_MESSAGE = 'The old key the server revealed does not fit the old lock. Betting is stopped. Inspect the proof before continuing.';
+export const RETIRED_LOCK_NOT_FRESH_MESSAGE = 'The new lock from the server is not a fresh lock. Betting is stopped. Inspect the proof before continuing.';
+export async function revealAndRetireLock(expectedCommitment, { fetchFn = globalThis.fetch, storage = globalThis.localStorage, apiBase = '/api' } = {}) {
+  const resp = await fetchFn(`${apiBase}/fairness/rotate`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ expectedCommitment }),
+  });
+  let data = {};
+  try { data = await resp.json(); } catch { data = {}; }
+  if (!resp.ok || !isCommitmentValid(data.commitment)) return { ok: false, error: data.error || 'A new lock could not be made.' };
+  const fits = typeof data.retired?.serverSeed === 'string' && await sha256Hex(data.retired.serverSeed) === expectedCommitment.serverSeedHash
+    && data.retired.serverSeedHash === expectedCommitment.serverSeedHash;
+  if (/^[a-f0-9]{64}$/.test(data.retired?.serverSeedHash || '')) { try { rememberRevealedSeed(data.retired.serverSeedHash, storage); } catch { /* storage full: the server never reuses a seed */ } }
+  let revealed = []; try { revealed = readRevealedHashes(storage); } catch { revealed = []; }
+  const fresh = isNextCommitmentSafe(data.commitment, { serverSeedHash: expectedCommitment.serverSeedHash, clientSeedBase: expectedCommitment.clientSeed }, revealed);
+  if (!fits) return { ok: false, problem: RETIRED_KEY_MISFIT_MESSAGE, retired: data.retired, fits };
+  if (!fresh) return { ok: false, problem: RETIRED_LOCK_NOT_FRESH_MESSAGE, retired: data.retired, fits };
+  return { ok: true, commitment: Object.freeze({ ...data.commitment }), retired: data.retired, fits };
+}
+
+// GET /api/rounds: the player's recent settled rounds with their fairness fields.
+export async function fetchPlayerRounds({ fetchFn = globalThis.fetch, apiBase = '/api' } = {}) {
+  const r = await fetchFn(`${apiBase}/rounds`);
+  if (!r.ok) throw new Error('The round history could not be loaded.');
+  const rows = await r.json();
+  return Array.isArray(rows) ? rows : [];
+}

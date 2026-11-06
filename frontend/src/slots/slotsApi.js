@@ -19,6 +19,7 @@ export function createSlotRequest(commitment, stake, mode = 'demo', {
   uuid = () => globalThis.crypto.randomUUID(),
   revealed = null,
   math = SLOT_MATH,
+  balanceBefore = null, // the settled balance shown when the spin is sent (pinned in the receipt, checked against balanceAfterCents)
 } = {}) {
   if (!isCommitmentValid(commitment)) throw new Error('A valid pre-bet lock is required.');
   if (!math.betLevels.includes(stake)) throw new Error('Please pick one of the bet amounts shown.');
@@ -29,7 +30,7 @@ export function createSlotRequest(commitment, stake, mode = 'demo', {
   const clientEntropy = hex(random(32));
   const requestId = uuid();
   const receipt = Object.freeze({ requestId, serverSeedHash: agreed.serverSeedHash, clientSeedBase: agreed.clientSeed, clientEntropy, nonce: agreed.nonce,
-    stake, mode, mathId: math.id, at: Date.now() });
+    stake, mode, mathId: math.id, balanceBefore: Number.isSafeInteger(balanceBefore) && balanceBefore >= 0 ? balanceBefore : null, at: Date.now() });
   return { receipt, body: { stake, requestId, expectedCommitment: agreed, clientEntropy, mode, mathId: math.id } };
 }
 function safeRevealed() { try { return readRevealedHashes(localStorage); } catch { return []; } }

@@ -22,12 +22,38 @@ export function uint32At(serverSeed, clientSeed, nonce) {
   return (draw, counter) => createHmac('sha256', serverSeed).update(\`\${clientSeed}:\${nonce}:slots:\${draw}:\${counter}\`).digest().readUInt32BE(0);
 }
 
-export function verifyProof(proof) {
+// The terms saved before the bet, from a receipt (nested proof) or the proof's own expected block.
+export function expectedFromReceipt(receipt) {
+  if (!receipt || typeof receipt !== 'object') return null;
+  const { serverSeedHash, clientSeedBase, clientEntropy, nonce, stake, mode, mathId } = receipt;
+  return { serverSeedHash, clientSeedBase, clientEntropy, nonce, stake, mode, mathId };
+}
+// Accepts the flat download ({ ...round, expected, version }) and the nested { receipt, round } shape.
+export function normalizeProof(proof) {
+  if (proof && typeof proof === 'object' && proof.round && typeof proof.round === 'object' && !proof.fairness) {
+    return { ...proof.round, expected: proof.round.expected || expectedFromReceipt(proof.receipt) || undefined };
+  }
+  return proof || {};
+}
+
+export function verifyProof(input) {
   const problems = [];
+  const proof = normalizeProof(input);
   const f = proof.fairness || {};
   if (typeof f.serverSeed !== 'string' || typeof f.serverSeedHash !== 'string') return { ok: false, problems: ['The proof has no revealed seed.'] };
   if (createHash('sha256').update(f.serverSeed).digest('hex') !== f.serverSeedHash) problems.push('The revealed seed does not open the lock.');
-  if (proof.expected && proof.expected.serverSeedHash !== f.serverSeedHash) problems.push('The lock differs from the one saved before the bet.');
+  const e = proof.expected;
+  if (e && typeof e === 'object') {
+    if (e.serverSeedHash !== f.serverSeedHash) problems.push('The lock differs from the one saved before the bet.');
+    if (e.clientSeedBase !== undefined && e.clientSeedBase !== f.clientSeedBase) problems.push('The lucky word differs from the one saved before the bet.');
+    if (e.clientEntropy !== undefined && e.clientEntropy !== f.clientEntropy) problems.push('The randomness differs from the one saved before the bet.');
+    if (e.nonce !== undefined && e.nonce !== f.nonce) problems.push('The round number differs from the one saved before the bet.');
+    if (e.stake !== undefined && e.stake !== proof.stake) problems.push('The stake differs from the one saved before the bet.');
+    if (e.mode !== undefined && e.mode !== proof.mode) problems.push('The play mode differs from the one saved before the bet.');
+    if (e.mathId !== undefined && e.mathId !== proof.mathId) problems.push('The payout table differs from the one saved before the bet.');
+    if (e.mathId !== undefined && e.mathId !== MATH.id) problems.push('The payout table saved before the bet is not the one this verifier embeds.');
+  }
+  if (typeof f.clientSeedBase === 'string' && typeof f.clientEntropy === 'string' && f.clientSeed !== f.clientSeedBase + ':' + f.clientEntropy) problems.push('The client seed was not built from the lucky word and the randomness.');
   let round = null;
   try { round = playRound({ stake: proof.stake, uint32At: uint32At(f.serverSeed, f.clientSeed, f.nonce), math: MATH }); }
   catch (e) { problems.push('The round could not be recomputed: ' + e.message); }
@@ -49,8 +75,7 @@ export function verifyProof(proof) {
 function main() {
   const file = process.argv[2];
   if (!file) { console.error('Usage: node verify-slots.mjs round-proof.json'); process.exit(2); }
-  const proof = JSON.parse(readFileSync(file, 'utf8'));
-  const r = verifyProof(proof);
+  const r = verifyProof(JSON.parse(readFileSync(file, 'utf8')));
   if (r.ok) { console.log(\`OK: \${r.round.spins.length} spin(s), total payout \${r.round.totalPayoutUnits} units, lock opened by the revealed seed.\`); process.exit(0); }
   console.log('MISMATCH'); for (const p of r.problems) console.log(' - ' + p); process.exit(1);
 }

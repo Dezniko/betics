@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PLAY_CHANNEL, OTHER_TAB_WINDOW_MS, COVER_TEXT, makeAnnouncement, isAnnouncement, isForeignRecent, createPlayGuard, coverRemainingMs } from '../src/playGuard.js';
-import { classifySpinRefusal, budgetFor, OTHER_TAB_MESSAGE } from '../src/spinRefusal.js';
+import { classifySpinRefusal, budgetFor, OTHER_TAB_MESSAGE, otherTabSeenRecently, OTHER_TAB_SEEN_WINDOW_MS, OTHER_TAB_GRACE_MS } from '../src/spinRefusal.js';
 import { ApiError, isSignedInElsewhere, SIGNED_IN_ELSEWHERE, walletApi } from '../src/walletApi.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -100,10 +100,13 @@ test('the games render the cover over the reels and the felt and announce every 
   assert.ok(!/[\u2013\u2014]|\p{Extended_Pictographic}/u.test(guard), 'no emoji or long dashes in player copy');
 });
 
-// ---- other_tab refusal: predicted, not counted, lock untouched ----
-test('a 409 other_tab refusal is its own class, counts against no budget and the roulette page keeps the lock', () => {
-  assert.equal(classifySpinRefusal(409, OTHER_TAB_MESSAGE, 'other_tab'), 'other_tab');
+// ---- other_tab refusal: predicted ONLY when this browser saw the other tab; otherwise counted and retired ----
+test('a 409 other_tab refusal is predicted (uncounted, lock kept) only when another tab was seen locally', () => {
+  assert.equal(classifySpinRefusal(409, OTHER_TAB_MESSAGE, 'other_tab', { otherTabSeen: true }), 'other_tab');
+  assert.equal(classifySpinRefusal(409, OTHER_TAB_MESSAGE, 'other_tab'), 'other_tab', 'callers that pass nothing keep the old class');
+  assert.equal(classifySpinRefusal(409, OTHER_TAB_MESSAGE, 'other_tab', { otherTabSeen: false }), 'other_tab_unseen', 'the server alone cannot claim another tab');
   assert.equal(budgetFor('other_tab'), null, 'nothing consumed: not counted');
+  assert.equal(budgetFor('other_tab_unseen'), 'unpredicted', 'counted in the strict budget');
   assert.equal(classifySpinRefusal(409, 'something else', null), 'unpredicted', 'a 409 without the code stays strict');
   assert.equal(OTHER_TAB_MESSAGE, 'You are playing in another tab or game. Finish that round first.');
   const app = src('App.jsx');
@@ -111,8 +114,29 @@ test('a 409 other_tab refusal is its own class, counts against no budget and the
   assert.match(branch, /forgetOpenLock\(entry\.serverSeedHash\)/, 'the lock is not retired through the reveal');
   assert.match(branch, /setNotice\(reason \|\| OTHER_TAB_MESSAGE\)/, 'the server text goes in a notice, not an error');
   assert.ok(!/recordRefusal/.test(branch), 'no budget is touched');
+  assert.match(app, /const otherTabSeen = otherTabSeenRecently\(\{ lastForeignAt: guard\.foreignAt\(\), otherTabRecently: \(now, w\) => otherTabRecently\(presenceRef\.current\?\.id \?\? null, now, undefined, w\) \}\);/, 'roulette asks its own play guard and heartbeat');
+  assert.match(app, /classifySpinRefusal\(resp\.status, reason, data\?\.code, \{ otherTabSeen \}\)/);
+  assert.match(app, /if \(kind === 'other_tab_unseen'\) \{ setError\(`\$\{OTHER_TAB_UNSEEN_MESSAGE\}/, 'the unseen case is told after the lock was retired');
   const slot = src('slots/SlotsApp.jsx');
-  assert.match(slot, /if \(kind === 'other_tab'\) \{ setNotice\(data\?\.error \|\| OTHER_TAB_MESSAGE\); return; \}/);
+  assert.match(slot, /if \(kind === 'other_tab'\) \{ forgetOpenLock\(entry\.serverSeedHash\); settleReelsRef\.current\(\); setNotice\(reason \|\| OTHER_TAB_MESSAGE\); return; \}/);
+  assert.match(slot, /const otherTabSeen = otherTabSeenRecently\(\{ lastForeignAt: guard\.foreignAt\(\), otherTabRecently: \(now, w\) => otherTabRecently\(session\.tabId, now, undefined, w\) \}\);/, 'the slot asks its own play guard and heartbeat');
+  assert.match(slot, /classifySpinRefusal\(resp\.status, reason, data\?\.code, \{ otherTabSeen \}\)/);
+  assert.match(slot, /if \(kind === 'other_tab_unseen'\) \{ setError\(`\$\{OTHER_TAB_UNSEEN_MESSAGE\}/);
+  assert.match(src('PlayGuard.jsx'), /foreignAtRef\.current = m\.at;/, 'the guard keeps when another tab last announced, readable synchronously');
+});
+
+test('otherTabSeenRecently: BroadcastChannel announcement or heartbeat within 8 s plus 2 s grace', () => {
+  const now = 1_700_000_000_000;
+  assert.equal(OTHER_TAB_SEEN_WINDOW_MS, 8000); assert.equal(OTHER_TAB_GRACE_MS, 2000);
+  assert.equal(otherTabSeenRecently({ now }), false, 'nothing seen');
+  assert.equal(otherTabSeenRecently({ lastForeignAt: now - 9000, now }), true, 'announcement inside the window plus grace');
+  assert.equal(otherTabSeenRecently({ lastForeignAt: now - 10001, now }), false, 'too old');
+  assert.equal(otherTabSeenRecently({ lastForeignAt: now + 120000, now }), false, 'a future stamp (wrong clock) does not count');
+  const calls = [];
+  assert.equal(otherTabSeenRecently({ now, otherTabRecently: (t, w) => { calls.push([t, w]); return true; } }), true, 'heartbeat from another tab counts');
+  assert.deepEqual(calls, [[now, 10000]], 'the heartbeat check uses the same short window, not the 2 minute one');
+  assert.equal(otherTabSeenRecently({ now, otherTabRecently: () => false }), false);
+  assert.equal(otherTabSeenRecently({ now, otherTabRecently: () => { throw new Error('no storage'); } }), false, 'a storage error never counts as seen');
 });
 
 // ---- signed in elsewhere ----
@@ -138,8 +162,9 @@ test('walletApi.me surfaces a 401 signed_in_elsewhere and still returns null for
 
 test('the lobby, the slot and the roulette page poll the profile and show the server text with Connect again', () => {
   const hook = src('useSession.js');
-  assert.match(hook, /ME_POLL_MS = 10 \* 1000/, 'noticed within about 15 s');
-  assert.match(hook, /setInterval\(\(\) => \{ refreshProfile\(\); \}, ME_POLL_MS\)/);
+  assert.match(src('sessionPolling.js'), /ME_POLL_MS = 10 \* 1000/, 'noticed within about 15 s while playing');
+  assert.match(hook, /pollDelayMs\(\{ connected, visible: visible\(\), lastRoundAt: lastRoundAtRef\.current, busy: busyRef\.current \}\)/, 'the schedule comes from the pure helper');
+  assert.match(hook, /document\.addEventListener\('visibilitychange', onVisible\)/, 'refreshes when the tab comes back');
   assert.match(hook, /isSignedInElsewhere\(e\)/);
   for (const f of ['Lobby.jsx', 'slots/SlotsApp.jsx', 'App.jsx']) {
     const text = src(f);

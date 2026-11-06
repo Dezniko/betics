@@ -28,12 +28,19 @@ async function makeRound(want) {
   throw new Error('no fixture seed found');
 }
 
-function fixtureScript({ entropy, reply }) {
+// mode: 'ok' (normal round) | 'refuse503' (the spin is refused, lock and balance untouched) | 'other_tab'
+// (409 other_tab from the server while this browser saw no other tab) | 'lost' (the first post never answers;
+// the round is in /api/rounds; the byte-identical replay returns the cached reply).
+function fixtureScript({ entropy, reply }, mode = 'ok') {
+  const seed = reply.fairness.serverSeed, nextLock = reply.fairness.nextCommitment.serverSeedHash;
+  const row = { id: reply.roundId, game: 'godsofpower', stake_cents: reply.stake, payout_cents: reply.totalPayoutCents, server_seed: seed, server_seed_hash: reply.fairness.serverSeedHash, client_seed: reply.fairness.clientSeed, client_seed_base: reply.fairness.clientSeedBase, client_entropy: reply.fairness.clientEntropy, nonce: 0, request_id: reply.requestId, real_money: 0, math_id: reply.mathId, created_at: '2026-11-06 10:00:00', status: 'settled', revealed_at: '2026-11-06 10:00:01',
+    outcome_json: JSON.stringify({ game: 'godsofpower', spins: reply.spins, freeSpinsAwarded: reply.freeSpinsAwarded, freeSpinsPlayed: reply.freeSpinsPlayed, capped: reply.capped }) };
   return `(()=>{
     const audio=localStorage.getItem('noir:audio:v1');localStorage.clear();if(audio!==null)localStorage.setItem('noir:audio:v1',audio);
     localStorage.setItem('betics:adult:v1','1');
-    const reply=${JSON.stringify(reply)};const entropy=${JSON.stringify(entropy)};
-    window.qaFixture={label:'controlled fixture (not live data)',posts:0,savedBeforePost:false};
+    const reply=${JSON.stringify(reply)};const entropy=${JSON.stringify(entropy)};const mode=${JSON.stringify(mode)};const row=${JSON.stringify(row)};const nextLock=${JSON.stringify(nextLock)};const seed=${JSON.stringify(seed)};
+    window.qaFixture={label:'controlled fixture (not live data)',posts:0,savedBeforePost:false,rotates:[],roundsReads:0,bodies:[]};
+    let lock={serverSeedHash:reply.fairness.serverSeedHash,clientSeed:reply.fairness.clientSeedBase,nonce:0};
     const grv=crypto.getRandomValues.bind(crypto);
     crypto.getRandomValues=(arr)=>{if(arr instanceof Uint8Array&&arr.length===32){for(let i=0;i<32;i++)arr[i]=parseInt(entropy.slice(i*2,i*2+2),16);return arr;}return grv(arr);};
     crypto.randomUUID=()=>reply.requestId;
@@ -43,11 +50,17 @@ function fixtureScript({ entropy, reply }) {
       if(p==='/api/session')return json({balanceCents:reply.balanceBeforeCents,demoAllowed:true});
       if(p==='/api/wallet/me')return json({error:'no wallet'},401);
       if(p==='/api/wallet')return json({balanceCents:reply.balanceAfterCents});
-      if(p.endsWith('/fairness/commitment'))return json({serverSeedHash:reply.fairness.serverSeedHash,clientSeed:reply.fairness.clientSeedBase,nonce:0});
+      if(p.endsWith('/fairness/commitment'))return json(lock);
+      if(p.endsWith('/fairness/rotate')){const b=JSON.parse(opt.body);qaFixture.rotates.push(b);if(b.expectedCommitment.serverSeedHash!==lock.serverSeedHash)return json({error:'stale or mismatched expectedCommitment'},409);const retired={serverSeed:seed,serverSeedHash:lock.serverSeedHash};lock={serverSeedHash:nextLock,clientSeed:lock.clientSeed,nonce:0};return json({retired,commitment:lock});}
+      if(p==='/api/rounds'){qaFixture.roundsReads++;return json(mode==='lost'&&qaFixture.posts>=1?[row]:[]);}
       if(p.endsWith('/games/godsofpower/config'))return json({gameId:'godsofpower',enabled:true,minStakeCents:2000,maxStakeCents:1000000,maxWinCents:200000000});
       if(p.endsWith('/casino/reserve'))return json({live:false});
       if(p.endsWith('/api/events'))return json({ok:true});
-      if(p.endsWith('/games/godsofpower/spin')){const b=JSON.parse(opt.body);qaFixture.posts++;qaFixture.savedBeforePost=!!localStorage.getItem('betics:slot-receipt:'+b.requestId);qaFixture.body=b;await new Promise(r=>setTimeout(r,250));return json(reply);}
+      if(p.endsWith('/games/godsofpower/spin')){const b=JSON.parse(opt.body);qaFixture.posts++;qaFixture.bodies.push(opt.body);qaFixture.savedBeforePost=!!localStorage.getItem('betics:slot-receipt:'+b.requestId);qaFixture.openLockBeforePost=(JSON.parse(localStorage.getItem('betics:open-locks:v1')||'[]')).some(e=>e.serverSeedHash===b.expectedCommitment.serverSeedHash);qaFixture.body=b;await new Promise(r=>setTimeout(r,250));
+        if(mode==='refuse503')return json({error:'Real play is paused while the casino wallet is checked. Please try again shortly.'},503);
+        if(mode==='other_tab')return json({error:'You are playing in another tab or game. Finish that round first.',code:'other_tab'},409);
+        if(mode==='lost'&&qaFixture.posts===1){await new Promise(r=>setTimeout(r,40000));return json({error:'never'},500);}
+        lock={serverSeedHash:nextLock,clientSeed:lock.clientSeed,nonce:0};return json(reply);}
       return json({error:'unknown fixture route'},404);};
   })()`;
 }
@@ -98,6 +111,90 @@ async function open(w, h, script) {
     assert.deepEqual(x.errors.filter((e) => !/ResizeObserver/.test(e)), [], `${label}: page errors`);
     shots.push(await x.screenshot(`${label}-end`));
     console.log('PASS', JSON.stringify(summary));
+    await x.close();
+  }
+
+  // ---- refusal protection (same protocol as roulette) ----
+  const lockShown = (x) => x.ev(`document.querySelector('[data-testid="header-lock"] code')?.textContent || ''`);
+  const waitIdle = async (x, ms = 60000) => { for (let i = 0; i < ms / 100; i++) { await sleep(100); if (await x.ev(`document.querySelector('.slot-app').dataset.phase`) === 'idle' && await x.ev(`qaFixture.posts`) >= 1) { await sleep(300); return; } } throw new Error('did not settle'); };
+  const budget = (x, which) => x.ev(`(JSON.parse(localStorage.getItem('betics:refusals:${which}:v2')||'[]')).length`);
+  const openLocks = (x) => x.ev(`JSON.parse(localStorage.getItem('betics:open-locks:v1')||'[]').length`);
+  const toast = (x) => x.ev(`[...document.querySelectorAll('[data-testid="slot-error"], [data-testid="slot-notice"]')].map(e=>e.textContent).join(' | ')`);
+
+  { // 1. a refused spin (503 after the entropy was sent) retires the lock through the reveal and shows the next lock
+    const fx = await makeRound('small');
+    const x = await open(1280, 800, fixtureScript(fx, 'refuse503'));
+    const before = await lockShown(x);
+    assert.equal(before.slice(0, 8), fx.reply.fairness.serverSeedHash.slice(0, 8), 'the lock before the spin is the fixture lock');
+    await x.ev(`document.querySelector('[data-testid="slot-spin"]').click()`);
+    await waitIdle(x);
+    assert.ok(await x.ev('qaFixture.openLockBeforePost'), 'refuse503: the open lock was saved BEFORE the post');
+    const rotates = await x.ev('qaFixture.rotates');
+    assert.equal(rotates.length, 1, 'refuse503: the lock was retired through POST /api/fairness/rotate');
+    assert.equal(rotates[0].expectedCommitment.serverSeedHash, fx.reply.fairness.serverSeedHash, 'refuse503: rotate carries the saved lock');
+    const after = await lockShown(x);
+    assert.equal(after.slice(0, 8), fx.reply.fairness.nextCommitment.serverSeedHash.slice(0, 8), `refuse503: the next lock is shown (${after})`);
+    assert.equal(await budget(x, 'predicted'), 1, 'refuse503: counted once in the predicted budget');
+    assert.equal(await budget(x, 'unpredicted'), 0);
+    assert.equal(await openLocks(x), 0, 'refuse503: the open lock list is clear again');
+    const log = await x.ev(`JSON.parse(localStorage.getItem('betics:refused-log:v1')||'[]')`);
+    assert.equal(log.length, 1); assert.equal(log[0].game, 'godsofpower'); assert.equal(log[0].kind, 'predicted'); assert.deepEqual(log[0].stops, fx.reply.spins[0].stops, 'refuse503: the would-have reel stops are logged from the revealed key');
+    assert.equal(log[0].won, fx.reply.totalPayoutCents, 'refuse503: and the would-have payout');
+    const t = await toast(x);
+    assert.match(t, /Real play is paused/, 'refuse503: the server reason is shown');
+    assert.match(t, /Had it gone ahead, the reels would have stopped at/, 'refuse503: the would-have outcome is shown');
+    assert.ok(!(await x.ev(`document.querySelector('[data-testid="slot-spin"]').disabled`)), 'refuse503: play goes on with the new lock');
+    assert.ok(await x.ev(`JSON.parse(localStorage.getItem('noir:revealed:v1')||'[]').includes(${JSON.stringify(fx.reply.fairness.serverSeedHash)})`), 'refuse503: the retired lock is remembered as revealed');
+    shots.push(await x.screenshot('fixture-refused-503'));
+    assert.deepEqual(x.errors.filter((e) => !/ResizeObserver/.test(e)), [], 'refuse503: page errors');
+    console.log('PASS', JSON.stringify({ label: 'refuse503', api: 'controlled fixture (not live data)', rotates: rotates.length, toast: t.slice(0, 160) }));
+    await x.close();
+  }
+  { // 2. a 409 other_tab with NO other tab seen by this browser counts against the strict budget and retires the lock
+    const fx = await makeRound('small');
+    const x = await open(1280, 800, fixtureScript(fx, 'other_tab'));
+    await x.ev(`document.querySelector('[data-testid="slot-spin"]').click()`);
+    await waitIdle(x);
+    assert.equal((await x.ev('qaFixture.rotates')).length, 1, 'other_tab unseen: the lock was retired through the reveal');
+    assert.equal(await budget(x, 'unpredicted'), 1, 'other_tab unseen: counted in the strict budget');
+    assert.equal((await lockShown(x)).slice(0, 8), fx.reply.fairness.nextCommitment.serverSeedHash.slice(0, 8), 'other_tab unseen: next lock shown');
+    const t = await toast(x);
+    assert.match(t, /this browser saw no other tab/, 'other_tab unseen: the player is told');
+    const log = await x.ev(`JSON.parse(localStorage.getItem('betics:refused-log:v1')||'[]')`);
+    assert.equal(log[0]?.kind, 'other_tab_unseen');
+    shots.push(await x.screenshot('fixture-other-tab-unseen'));
+    assert.deepEqual(x.errors.filter((e) => !/ResizeObserver/.test(e)), [], 'other_tab: page errors');
+    console.log('PASS', JSON.stringify({ label: 'other_tab_unseen', api: 'controlled fixture (not live data)', unpredicted: await budget(x, 'unpredicted') }));
+    await x.close();
+  }
+  { // 3. a lost reply whose round is in /api/rounds is recovered: the byte-identical body is re-posted and the cached reply presented
+    const fx = await makeRound('small');
+    const x = await open(1280, 800, fixtureScript(fx, 'lost'));
+    await x.ev(`document.querySelector('[data-testid="slot-spin"]').click()`);
+    let presented = false, checking = false;
+    for (let i = 0; i < 700; i++) { // the page waits 30 s for the reply, then looks in /api/rounds
+      await sleep(100);
+      const st = await x.ev(`({phase:document.querySelector('.slot-app').dataset.phase,posts:qaFixture.posts,notice:document.querySelector('[data-testid="slot-notice"]')?.textContent||'',line:!!document.querySelector('.slot-line'),win:!!document.querySelector('[data-testid="slot-win"]')})`);
+      if (/Checking whether your spin went through/.test(st.notice)) checking = true;
+      if (st.phase === 'presenting' || st.line || st.win) presented = true;
+      if (st.posts >= 2 && st.phase === 'idle' && presented) break;
+    }
+    const bodies = await x.ev('qaFixture.bodies');
+    assert.equal(bodies.length, 2, 'lost: the spin was posted twice');
+    assert.equal(bodies[0], bodies[1], 'lost: the replay body is byte-identical');
+    assert.ok(checking, 'lost: the player saw the "checking" notice');
+    assert.ok(presented, 'lost: the cached reply was presented as a normal round');
+    assert.ok(await x.ev('qaFixture.roundsReads') >= 1, 'lost: /api/rounds was checked');
+    assert.equal((await x.ev('qaFixture.rotates')).length, 0, 'lost: the lock was NOT retired, the round used it');
+    assert.equal(await openLocks(x), 0, 'lost: the open lock is closed by the verified reply');
+    const t = await toast(x);
+    assert.ok(!/[Rr]eload/.test(t), `lost: no reload message (${t})`);
+    assert.equal((await lockShown(x)).slice(0, 8), fx.reply.fairness.nextCommitment.serverSeedHash.slice(0, 8), 'lost: the next lock from the reply is shown');
+    const bal = await x.ev(`document.querySelector('[data-testid="header-balance"]').textContent`);
+    assert.equal(Number(bal.replace(/[^0-9.]/g, '')), fx.reply.balanceAfterCents / 100, `lost: settled balance shown (${bal})`);
+    shots.push(await x.screenshot('fixture-lost-reply-recovered'));
+    assert.deepEqual(x.errors.filter((e) => !/ResizeObserver/.test(e)), [], 'lost: page errors');
+    console.log('PASS', JSON.stringify({ label: 'lost_reply_recovered', api: 'controlled fixture (not live data)', posts: bodies.length }));
     await x.close();
   }
   console.log('SLOTS FIXTURE QA PASSED (controlled fixture rounds, real engine, real browser verification). Screenshots:', shots.length, 'in', OUT);

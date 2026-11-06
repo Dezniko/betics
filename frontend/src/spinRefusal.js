@@ -32,12 +32,16 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PREDICTED_400 = /total bet must be at least|total bet can be at most|could win more than|over the table limit|most you can bet/i;
 const STALE_LOCK = /stale or mismatched expectedCommitment/i;
 
-// 'auth' | 'table_changed' | 'other_tab' | 'stale_lock' | 'predicted' | 'unpredicted' | 'transient'
-export function classifySpinRefusal(status, message = '', code = null) {
+// 'auth' | 'table_changed' | 'other_tab' | 'other_tab_unseen' | 'stale_lock' | 'predicted' | 'unpredicted' | 'transient'
+// otherTabSeen: whether THIS browser saw another tab of the game play recently (otherTabSeenRecently). A
+// 409 other_tab is only "predicted" when it did; otherwise the server alone claims another tab exists,
+// which a dishonest server could use as a free, uncounted way to drop a spin: that is 'other_tab_unseen',
+// counted in the strict budget and the lock retired. Callers that pass nothing keep the old class.
+export function classifySpinRefusal(status, message = '', code = null, { otherTabSeen } = {}) {
   const text = String(message || '');
   if (status === 401) return 'auth'; // sign-in expired: never reached the game, not counted
   if (status === 409 && code === 'table_changed') return 'table_changed'; // refused before anything was used
-  if (status === 409 && code === 'other_tab') return 'other_tab'; // another tab or game has a fresh round: nothing used, lock untouched
+  if (status === 409 && code === 'other_tab') return otherTabSeen === false ? 'other_tab_unseen' : 'other_tab'; // another tab or game has a fresh round: nothing used, lock untouched
   if (status === 409 && STALE_LOCK.test(text)) return 'stale_lock'; // the lock moved on (another tab or device?)
   if (status === 402) return 'predicted'; // not enough balance
   if (status === 403) return 'predicted'; // Demo/Real mode or account state
@@ -51,8 +55,20 @@ export function classifySpinRefusal(status, message = '', code = null) {
 // Which budget a refusal class counts against (null = not counted).
 export function budgetFor(kind) {
   if (kind === 'predicted' || kind === 'table_changed' || kind === 'transient') return 'predicted';
-  if (kind === 'unpredicted' || kind === 'stale_lock' || kind === 'other_device') return 'unpredicted';
+  if (kind === 'unpredicted' || kind === 'stale_lock' || kind === 'other_device' || kind === 'other_tab_unseen') return 'unpredicted';
   return null;
+}
+
+// Did this browser itself see another tab of the game play within the server's other-tab window (8 s)
+// plus a small grace for clock and delivery differences? Two local signals count: a BroadcastChannel
+// announcement from another tab (playGuard, `lastForeignAt`) and a tabPresence heartbeat from another
+// tab (`otherTabRecently`, passed in so this stays pure). Only then is a 409 other_tab predicted.
+export const OTHER_TAB_SEEN_WINDOW_MS = 8 * 1000;
+export const OTHER_TAB_GRACE_MS = 2 * 1000;
+export function otherTabSeenRecently({ lastForeignAt = null, otherTabRecently = null, now = Date.now(), windowMs = OTHER_TAB_SEEN_WINDOW_MS + OTHER_TAB_GRACE_MS } = {}) {
+  if (Number.isFinite(lastForeignAt) && now - lastForeignAt <= windowMs && lastForeignAt <= now + 60 * 1000) return true;
+  if (typeof otherTabRecently === 'function') { try { return otherTabRecently(now, windowMs) === true; } catch { return false; } }
+  return false;
 }
 
 export const SIGN_IN_EXPIRED_MESSAGE = 'Your sign-in expired. Please connect your wallet again.';
@@ -171,10 +187,15 @@ export function ownRoundProblems(round, entry) {
 // ---- refused spins log: what each refused spin would have landed on ----
 // Entry: { at, lock, pocket (0..36, or null when the key was never shown), won (total payout it would
 // have paid, stake included, or null when the bets are not known), kind, reason }
-const LOG_KINDS = new Set(['predicted', 'unpredicted', 'table_changed', 'auth', 'stale_lock', 'lost', 'never_opened', 'other_device', 'transient']);
+// Slot entries (game 'godsofpower') carry `stops` (the reel stops of the base spin the refused round
+// would have shown) instead of a pocket; `won` is the round's total payout.
+const LOG_KINDS = new Set(['predicted', 'unpredicted', 'table_changed', 'auth', 'stale_lock', 'lost', 'never_opened', 'other_device', 'transient', 'other_tab_unseen']);
+const SLOT_GAME = 'godsofpower';
+function validStops(stops) { return Array.isArray(stops) && stops.length === 5 && stops.every((s) => Number.isInteger(s) && s >= 0 && s < 1000); }
 function validLog(e) {
   return !!e && typeof e === 'object' && Number.isFinite(e.at) && HASH.test(e.lock || '') && LOG_KINDS.has(e.kind)
     && (e.pocket === null || (Number.isInteger(e.pocket) && e.pocket >= 0 && e.pocket <= 36))
+    && (e.game === undefined || (e.game === SLOT_GAME && (e.stops === null || validStops(e.stops))))
     && (e.won == null || (Number.isSafeInteger(e.won) && e.won >= 0)) && typeof e.reason === 'string' && e.reason.length <= 200;
 }
 export function readRefusedLog(storage = store()) {
@@ -188,9 +209,26 @@ export function addRefusedSpin({ at = Date.now(), lock, pocket = null, won = nul
   writeJson(storage, LOG_KEY, list);
   return list;
 }
+// A refused slot round: the reel stops its base spin would have shown and the total it would have paid.
+export function addRefusedSlotSpin({ at = Date.now(), lock, stops = null, won = null, kind, reason = '' }, storage = store()) {
+  const e = { at, lock, pocket: null, game: SLOT_GAME, stops: validStops(stops) ? [...stops] : null, won: validStops(stops) ? won : null, kind, reason: clean(reason) };
+  if (!validLog(e)) return readRefusedLog(storage);
+  const list = [...readRefusedLog(storage).filter((x) => x.lock !== lock), e].slice(-MAX_REFUSED_LOG);
+  writeJson(storage, LOG_KEY, list);
+  return list;
+}
 export function refusedSpinText(e) {
+  if (e.game === SLOT_GAME) {
+    if (!e.stops) return 'Refused spin: the lock was never opened';
+    return `Refused spin: the reels would have stopped at ${e.stops.join(' ')}${e.won > 0 ? `, would have won ${fmtShort(e.won)}` : ''}`;
+  }
   if (e.pocket === null) return 'Refused spin: the lock was never opened';
   return `Refused spin: would have been ${e.pocket}${e.won > 0 ? `, would have won ${fmtShort(e.won)}` : ''}`;
+}
+// One plain sentence for a slot toast: what the refused round would have shown and paid.
+export function slotWouldHaveText(stops, won) {
+  if (!validStops(stops)) return '';
+  return won > 0 ? `Had it gone ahead, the reels would have stopped at ${stops.join(' ')} and won ${fmtShort(won)}.` : `Had it gone ahead, the reels would have stopped at ${stops.join(' ')} with no win.`;
 }
 
 // What a refused (or voided) spin would have paid on this pocket: total payout, stake included, with
@@ -234,6 +272,8 @@ export function shortCreditMessage(expected, actual) {
   const have = Number.isSafeInteger(actual) ? ` Your balance shows ${fmtShort(actual)}, but after this spin it should be at least ${fmtShort(expected)}.` : '';
   return `Payout check failed: your balance was credited too little.${have} Betting is stopped. Inspect the round before continuing.`;
 }
+
+export const OTHER_TAB_UNSEEN_MESSAGE = 'The server said you were playing in another tab, but this browser saw no other tab. Your bet was not taken. That lock now counts as used, so the game opened it, checked it and made a new one. It counts toward the safety limit for refused spins.';
 
 // A spin request that gets no full reply in this time counts as a lost reply: the lock stays in the
 // open locks list and is checked in the round history, exactly like a dropped connection.
@@ -282,4 +322,21 @@ export function checkRefusalAgainstKnown(kind, status, message = '', known = {})
   // The table limit moves with every other player's spins and wins, and the page's figure can be a minute old,
   // so a table limit refusal is never treated as unexpected on that figure alone.
   return kind;
+}
+
+// ---- lost replies (shared by roulette and the slot) ----
+// How long a spin with no reply is looked for in the round history, and how often.
+export const LOST_REPLY_WAIT_MS = 20000;
+export const LOST_REPLY_POLL_MS = 2000;
+const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Polls GET /api/rounds (through `fetchRounds`) until a round using the open lock appears or the wait
+// is over. Returns findRoundForLock's { round, own } or null. Fetch errors (still offline) are retried.
+export async function waitForRoundWithLock(entry, fetchRounds, { waitMs = LOST_REPLY_WAIT_MS, pollMs = LOST_REPLY_POLL_MS, sleep = defaultSleep, now = Date.now } = {}) {
+  let hit = null;
+  const deadline = now() + waitMs;
+  while (!hit && now() < deadline) {
+    await sleep(pollMs);
+    try { hit = findRoundForLock(await fetchRounds(), entry); } catch { hit = null; }
+  }
+  return hit;
 }

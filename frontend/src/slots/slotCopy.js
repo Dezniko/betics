@@ -101,6 +101,7 @@ export const PAGE_COPY = Object.freeze({
   capped: 'Round cap reached',
   verificationFailed: 'This round could not be checked against the lock. Play is paused. Reload the page to go on.',
   lostReply: 'The connection dropped before the spin was confirmed. Reload the page to see whether it was played.',
+  lostReplyChecking: 'The connection dropped. Checking whether your spin went through...',
   noLock: 'The lock for your next spin could not be loaded. Please reload the page.',
   autoStoppedBalance: 'Auto spin stopped: the balance is below the bet.',
   autoStoppedFree: 'Auto spin stopped for the free spins.',

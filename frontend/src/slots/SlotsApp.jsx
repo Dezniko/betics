@@ -13,14 +13,18 @@ import { useCasinoReserve } from '../CasinoReserve.jsx';
 import { fmtMoney, fmtTics } from '../chips.js';
 import { headerLayout } from '../headerModel.js';
 import { displayedBalanceCents } from '../balanceDisplay.js';
-import { isCommitmentValid, isNextCommitmentSafe, readRevealedHashes, rememberRevealedSeed } from '../fairnessClient.js';
-import { postJsonWithTimeout, classifySpinRefusal, OTHER_TAB_MESSAGE } from '../spinRefusal.js';
+import { isCommitmentValid, isNextCommitmentSafe, readRevealedHashes, rememberRevealedSeed, revealAndRetireLock, fetchPlayerRounds } from '../fairnessClient.js';
+import { postJsonWithTimeout, classifySpinRefusal, budgetFor, recordRefusal, refusalStopMessage, refusalRetiredMessage, rememberOpenLock, updateOpenLock, forgetOpenLock, findRoundForLock,
+  addRefusedSlotSpin, slotWouldHaveText, otherTabSeenRecently, waitForRoundWithLock, OTHER_TAB_MESSAGE, OTHER_TAB_UNSEEN_MESSAGE, SIGN_IN_EXPIRED_MESSAGE, REFUSAL_NO_LOCK_MESSAGE,
+  LOST_REPLY_MESSAGE, LOST_REPLY_PAUSED_MESSAGE, OTHER_DEVICE_MESSAGE, OTHER_DEVICE_ALONE_MESSAGE, STALE_LOCK_MESSAGE } from '../spinRefusal.js';
+import { startPresence, otherTabRecently } from '../tabPresence.js';
 import { isSignedInElsewhere } from '../walletApi.js';
 import { winTier, celebrationTiming, countEase } from '../winCelebration.js';
 import { ensureAudioContext } from '../sound.js';
-import { verifySlotRound } from './slotsVerify.js';
+import { verifySlotRound, recomputeSlotRound, sha256Hex } from './slotsVerify.js';
+import { slotRoundFromRow, withoutSlotBalance } from './slotHistory.js';
 import { SLOT_API, createSlotRequest, saveSlotReceipt, betLevelStates, pickBetLevel, stepBetLevel, fmtBet, autoShouldStop } from './slotsApi.js';
-import { buildTimeline, TIMING, winningCells } from './slotAnim.js';
+import { buildTimeline, TIMING, winningCells, prefersReducedMotion, motionEffects } from './slotAnim.js';
 import { PAGE_COPY as C } from './slotCopy.js';
 import Reels from './Reels.jsx';
 import SlotPaytable from './SlotPaytable.jsx';
@@ -63,6 +67,8 @@ export default function SlotsApp() {
   const { user, profile, mode, modeInfo, balance } = session;
   // One tab at a time: this tab announces its spins; another tab's spin covers the reels for 8 s.
   const guard = usePlayGuard({ game: 'godsofpower', tabId: session.tabId });
+  // Heartbeat of this tab (tabPresence): a 409 other_tab is only believed when another tab was really seen.
+  useEffect(() => { const p = startPresence(); return () => p.stop(); }, []);
 
   // Live game settings and the lock for the next round.
   const [config, setConfig] = useState(null);
@@ -146,6 +152,7 @@ export default function SlotsApp() {
   const [burstKey, setBurstKey] = useState(0); // coin burst from the win amount
   const [counterFlash, setCounterFlash] = useState(0); // retrigger flashes the free spin counter
   const [hidden, setHidden] = useState(() => typeof document !== 'undefined' && document.hidden);
+  const [reducedMotion, setReducedMotion] = useState(() => prefersReducedMotion());
   const [lastRound, setLastRound] = useState(null);
   const [lastReceipt, setLastReceipt] = useState(null);
   const [lastVerdict, setLastVerdict] = useState(null);
@@ -192,10 +199,14 @@ export default function SlotsApp() {
   // Plays a verified round back: reels, wins, free spins, then the settled balance.
   const present = async (data, startedAt) => {
     const pace = autoRef.current ? 0.4 : 1;
-    const tl = buildTimeline(data, { pace });
+    const reduced = prefersReducedMotion();
+    const tl = buildTimeline(data, { pace, reduced });
+    // The reels show the picture the VERIFIED stops give (gridFor), never a grid the server sent on its own.
+    const shownGrid = (spin) => gridFor(spin.stops, SLOT_MATH);
     // The network time already spent counts as spinning time; the stagger between reels is kept.
     const origin = Math.max(startedAt, performance.now() - TIMING.spinMs);
     skipRef.current = false;
+    const effects = motionEffects({ reduced });
     const base = data.balanceBeforeCents - data.stake;
     let paid = 0;
     for (const step of tl.steps) {
@@ -205,7 +216,7 @@ export default function SlotsApp() {
         case 'spin-start': {
           setBanner((b) => (b && b.kind === 'win' ? null : b)); setDoor(false); setCelebration(null);
           setActiveLine(null); setWinCells([]); setDimming(false); setScatterHot(false); setAnticipationFrom(null);
-          setGrid(spin.grid); setStops(spin.stops); setFreeMode(step.free); setFreeLeft(step.freeLeft);
+          setGrid(shownGrid(spin)); setStops(spin.stops); setFreeMode(step.free); setFreeLeft(step.freeLeft);
           setSpinKey((k) => k + 1); setReelStates(Array(SLOT_MATH.reels).fill('spinning'));
           if (step.spin > 0) { setBanner(null); }
           sfx.spinLoopStart();
@@ -213,7 +224,7 @@ export default function SlotsApp() {
         }
         case 'reel-stop': {
           setReelStates((s) => s.map((v, i) => (i === step.reel ? 'stopped' : v)));
-          const column = spin.grid.map((row) => row[step.reel]);
+          const column = shownGrid(spin).map((row) => row[step.reel]);
           sfx.reelStop(step.reel, { sparkle: column.includes('W') || column.includes('S') || column.includes('D') });
           if (column.includes('W')) sfx.portraitLand();
           if (step.reel === SLOT_MATH.reels - 1) { sfx.spinLoopStop(); sfx.anticipation(false); }
@@ -230,7 +241,7 @@ export default function SlotsApp() {
         }
         case 'scatter-win': {
           setActiveLine(null); setDimming(true);
-          const cells = []; spin.grid.forEach((row, r) => row.forEach((code, reel) => { if (code === 'S') cells.push({ reel, row: r }); }));
+          const cells = []; shownGrid(spin).forEach((row, r) => row.forEach((code, reel) => { if (code === 'S') cells.push({ reel, row: r }); }));
           setWinCells(cells);
           break;
         }
@@ -240,9 +251,9 @@ export default function SlotsApp() {
           const from = base + paid, to = from + step.amount;
           paid += step.amount;
           setBanner({ kind: 'win', amount: step.amount, tier: step.tier, multiplier: step.multiplier });
-          setBurstKey((k) => k + 1);
+          if (effects.coinBurst) setBurstKey((k) => k + 1);
           if (step.tier === 'nice') sfx.voice('nice_win');
-          if (bigWin) { setCelebration({ total: step.amount, stake: data.stake, phase: 'totaling', pace }); sfx.coinShower(step.duration); sfx.voice(step.tier === 'mega' ? 'mega_win' : 'big_win'); }
+          if (bigWin) { setCelebration({ total: step.amount, stake: data.stake, phase: 'totaling', pace, reduced }); sfx.coinShower(step.duration); sfx.voice(step.tier === 'mega' ? 'mega_win' : 'big_win'); }
           await tween(step.duration, (t) => {
             const e = countEase(t);
             setWinShown(Math.round(step.amount * e));
@@ -277,41 +288,145 @@ export default function SlotsApp() {
     }
   };
 
-  // The spin: receipt saved BEFORE the post, verified in this browser BEFORE anything is shown.
-  const spin = async () => {
-    const c = commitmentRef.current;
-    if (!ready || !isCommitmentValid(c)) return;
-    ensureAudioContext();
-    let request;
-    try { request = createSlotRequest(c, bet, mode); saveSlotReceipt(request.receipt); }
-    catch (e) { setError(e.message); stopAuto(); return; }
-    setError(null); setNotice(null);
-    setPhase('spinning'); setCommittedStake(bet); setBanner(null); setCelebration(null); setDoor(false);
-    setActiveLine(null); setWinCells([]); setDimming(false); setScatterHot(false); setAnticipationFrom(null); setFreeMode(false);
-    setSpinKey((k) => k + 1); setReelStates(Array(SLOT_MATH.reels).fill('spinning'));
-    sfx.spinLoopStart();
-    guard.announce();
-    const startedAt = performance.now();
-    const { resp, data } = await postJsonWithTimeout(`${SLOT_API}/spin`, JSON.stringify(request.body));
-    const settleReels = () => { setReelStates(ALL_STOPPED); sfx.spinLoopStop(); setCommittedStake(0); setPhase('idle'); };
-    if (!resp) { // lost reply: the server may or may not have played it, so the lock is not reused here
-      settleReels(); stopAuto(); setCommitment(null); setError(C.lostReply); session.refreshWallet(); return;
+  // ---- refused spins and lost replies: the same protection as roulette (spinRefusal.js) ----
+  // Once this browser has sent its random value for a lock, ANY refusal could be the server dropping a round
+  // it did not like. So the lock is saved as "open" BEFORE the post; a refusal retires it through the reveal
+  // (rotate with expectedCommitment, the revealed key must open the saved lock), the round it would have
+  // given is worked out with the saved randomness and logged, and it counts in the rolling refusal budgets.
+  const identity = () => session.identity || user?.identity || 'guest';
+  const fetchRounds = () => fetchPlayerRounds();
+  // Opens the lock through the reveal and logs what the refused round would have shown and paid.
+  const openAndLog = async (entry, kind, reason, stake) => {
+    let swap;
+    try { swap = await revealAndRetireLock({ serverSeedHash: entry.serverSeedHash, clientSeed: entry.clientSeed, nonce: entry.nonce }); } catch (e) { swap = { ok: false, error: e.message }; }
+    if (swap.fits && typeof swap.retired?.serverSeed === 'string') {
+      let stops = null, won = null;
+      try {
+        const r = await recomputeSlotRound({ serverSeed: swap.retired.serverSeed, clientSeed: `${entry.clientSeed}:${entry.clientEntropy}`, nonce: entry.nonce, stake });
+        stops = r.spins[0]?.stops || null; won = r.totalPayoutUnits;
+      } catch { stops = null; won = null; }
+      addRefusedSlotSpin({ lock: entry.serverSeedHash, stops, won, kind, reason });
+      swap = { ...swap, wouldHave: slotWouldHaveText(stops, won) };
     }
-    if (!resp.ok) {
-      settleReels(); stopAuto();
-      const kind = classifySpinRefusal(resp.status, data?.error, data?.code);
-      if (kind === 'other_tab') { setNotice(data?.error || OTHER_TAB_MESSAGE); return; } // nothing used, the lock is still ours
-      if (kind === 'auth' && isSignedInElsewhere({ status: resp.status, code: data?.code })) { session.signedOutElsewhere({ message: data?.error }); return; }
-      if (kind === 'table_changed') { loadConfig(); setNotice(C.tableChanged); }
-      else setError(data?.error || 'Something went wrong. Please try again.');
-      // A refused spin may have moved the lock on; take the server's current one if it is still fresh.
-      loadCommitment(); session.refreshWallet();
+    if (swap.ok) forgetOpenLock(entry.serverSeedHash);
+    return swap;
+  };
+  // Takes the server's current lock after the old one was used elsewhere or settled. Throws when it is not fresh.
+  const adoptCurrentLock = async (oldHash, clientSeedBase) => {
+    const r = await fetch(`${API}/fairness/commitment`);
+    const c = await r.json();
+    let revealed = []; try { revealed = readRevealedHashes(); } catch { revealed = []; }
+    const ok = r.ok && isCommitmentValid(c) && c.serverSeedHash !== oldHash && !revealed.includes(c.serverSeedHash)
+      && isNextCommitmentSafe(c, { serverSeedHash: oldHash, clientSeedBase }, revealed);
+    if (!ok) throw new Error(C.noLock);
+    setCommitment(Object.freeze({ ...c }));
+  };
+  // The lock was used by a round this page did not make (another tab or device, or a server voiding the spin):
+  // counted in the strict budget, the would-have round logged from the revealed key, then the new lock is taken.
+  const acceptOtherDeviceRound = async (hit, entry, stake) => {
+    const row = hit.round;
+    const seedOk = typeof row.server_seed === 'string' && (await sha256Hex(row.server_seed)) === row.server_seed_hash;
+    if (!seedOk) { stopForVerification('A spin played with this lock in another tab or on another device does not check out. Betting is stopped. Inspect the round before continuing.'); return false; }
+    let stops = null, won = null;
+    try { const r = await recomputeSlotRound({ serverSeed: row.server_seed, clientSeed: `${entry.clientSeed}:${entry.clientEntropy}`, nonce: entry.nonce, stake }); stops = r.spins[0]?.stops || null; won = r.totalPayoutUnits; } catch { stops = null; }
+    addRefusedSlotSpin({ lock: entry.serverSeedHash, stops, won, kind: 'other_device', reason: 'The lock was used by a spin this page did not make' });
+    try { rememberRevealedSeed(row.server_seed_hash); } catch { /* storage full: the server never reuses a seed */ }
+    forgetOpenLock(entry.serverSeedHash);
+    const alone = !otherTabRecently(session.tabId);
+    const r = recordRefusal('unpredicted');
+    if (r.reached) { stopForVerification(refusalStopMessage('unpredicted', r.count)); return false; }
+    try { await adoptCurrentLock(entry.serverSeedHash, entry.clientSeed); } catch (e) { setError(e.message); return false; }
+    session.refreshWallet();
+    const extra = slotWouldHaveText(stops, won);
+    setNotice(`${alone ? OTHER_DEVICE_ALONE_MESSAGE : OTHER_DEVICE_MESSAGE}${extra ? ` ${extra}` : ''}`);
+    return true;
+  };
+  // This browser's own round is in the history although its reply was lost: asking again with the byte-identical
+  // body returns the server's cached reply, which is verified and presented like any other round (no reload).
+  const settleFoundRound = async ({ hit, request, bodyText, entry, startedAt }) => {
+    const { resp, data } = await postJsonWithTimeout(`${SLOT_API}/spin`, bodyText);
+    if (resp?.ok && data && data.requestId === request.receipt.requestId) { await processReply(data, request, entry, startedAt); return; }
+    // The replay failed: check the round from the history itself (no ending balance there) and tell the player.
+    settleReelsRef.current();
+    const round = slotRoundFromRow(hit.round);
+    const verdict = round ? await verifySlotRound(withoutSlotBalance(request.receipt), round) : { ok: false, problems: ['The round could not be read back.'] };
+    setLastRound(round); setLastReceipt(request.receipt); setLastVerdict(verdict);
+    if (!verdict.ok) { setCommitment(null); stopForVerification(C.verificationFailed); return; }
+    try { rememberRevealedSeed(hit.round.server_seed_hash); } catch { /* storage full */ }
+    forgetOpenLock(entry.serverSeedHash);
+    try { await adoptCurrentLock(entry.serverSeedHash, entry.clientSeed); } catch (e) { setError(e.message); }
+    session.refreshWallet();
+    setNotice(`Your spin went through and paid ${fmtMoney(round.totalPayoutCents)}. It was checked in your browser.`);
+  };
+  // No reply at all. The round history is checked for this lock for about 20 s: found and ours, the cached reply
+  // is fetched and presented; found and not ours, it is treated as another device's round; not found, the lock
+  // is opened through the reveal so the spin can never land later, and the player goes on with a new lock.
+  const recoverLostReply = async ({ entry, request, bodyText, startedAt }) => {
+    setNotice(C.lostReplyChecking);
+    let hit = await waitForRoundWithLock(entry, fetchRounds);
+    if (!hit) {
+      const swap = await openAndLog(entry, 'lost', 'The connection dropped before the reply', request.receipt.stake);
+      if (swap.problem) { settleReelsRef.current(); setNotice(null); setCommitment(null); stopForVerification(swap.problem); return; }
+      if (swap.ok) {
+        settleReelsRef.current(); setCommitment(swap.commitment);
+        const r = recordRefusal('unpredicted'); updateOpenLock(entry.serverSeedHash, { counted: true });
+        if (r.reached) { setNotice(null); stopForVerification(refusalStopMessage('unpredicted', r.count)); return; }
+        setNotice(`${LOST_REPLY_MESSAGE}${swap.wouldHave ? ` ${swap.wouldHave}` : ''}`); session.refreshWallet(); return;
+      }
+      try { hit = findRoundForLock(await fetchRounds(), entry); } catch { hit = null; } // one last look: maybe it landed meanwhile
+      if (!hit) { settleReelsRef.current(); setCommitment(null); setNotice(LOST_REPLY_PAUSED_MESSAGE); return; }
+    }
+    setNotice(null);
+    if (!hit.own) { settleReelsRef.current(); setCommitment(null); await acceptOtherDeviceRound(hit, entry, request.receipt.stake); return; }
+    await settleFoundRound({ hit, request, bodyText, entry, startedAt });
+  };
+  // Any refusal after the random value was sent. The lock always counts as used (opened through the reveal, the
+  // would-have round logged) and the refusal counts in its budget: predicted ones in the larger budget,
+  // unpredicted ones in the strict one. The only uncounted cases never used the lock: a 409 other_tab when this
+  // browser itself saw the other tab play, and an expired sign in.
+  const handleRefusal = async ({ kind, reason, code = null, entry, request, bodyText, startedAt }) => {
+    const stake = request.receipt.stake;
+    if (kind === 'other_tab') { forgetOpenLock(entry.serverSeedHash); settleReelsRef.current(); setNotice(reason || OTHER_TAB_MESSAGE); return; }
+    if (kind === 'auth' && isSignedInElsewhere({ status: 401, code })) { forgetOpenLock(entry.serverSeedHash); settleReelsRef.current(); session.signedOutElsewhere({ message: reason }); return; }
+    updateOpenLock(entry.serverSeedHash, { refused: true, counted: !budgetFor(kind) });
+    if (kind === 'stale_lock') {
+      // The lock moved on: a round used it, either this very spin (lost reply) or another tab or device.
+      let hit = null;
+      try { hit = findRoundForLock(await fetchRounds(), entry); } catch { hit = null; }
+      if (hit?.own) { await settleFoundRound({ hit, request, bodyText, entry, startedAt }); return; }
+      settleReelsRef.current(); setCommitment(null);
+      if (hit) { await acceptOtherDeviceRound(hit, entry, stake); return; }
+      const r = recordRefusal('unpredicted'); updateOpenLock(entry.serverSeedHash, { counted: true });
+      if (r.reached) { stopForVerification(refusalStopMessage('unpredicted', r.count)); return; }
+      setError(STALE_LOCK_MESSAGE);
       return;
     }
+    settleReelsRef.current(); setCommitment(null);
+    const swap = await openAndLog(entry, kind, reason, stake);
+    const wouldHave = swap.wouldHave || '';
+    if (swap.problem) { stopForVerification(swap.problem); return; }
+    if (swap.ok) setCommitment(swap.commitment);
+    const budget = budgetFor(kind);
+    if (budget) {
+      const r = recordRefusal(budget); updateOpenLock(entry.serverSeedHash, { counted: true });
+      if (r.reached) { stopForVerification(`${refusalStopMessage(budget, r.count)}${wouldHave ? ` ${wouldHave}` : ''}`); return; }
+    }
+    session.refreshWallet();
+    if (kind === 'auth') { setError(SIGN_IN_EXPIRED_MESSAGE); return; }
+    if (!swap.ok) { setError(`${reason ? `${reason.replace(/[.!?]?$/, '.')} ` : ''}${REFUSAL_NO_LOCK_MESSAGE}`); return; }
+    if (kind === 'table_changed') { loadConfig(); setNotice(C.tableChanged); return; }
+    if (kind === 'other_tab_unseen') { setError(`${OTHER_TAB_UNSEEN_MESSAGE}${wouldHave ? ` ${wouldHave}` : ''}`); return; }
+    if (kind === 'transient') { setError(`The game is busy for a moment${reason && reason !== 'internal error' ? ` (${reason.replace(/[.!?]$/, '')})` : ''}. Your bet was not taken.${wouldHave ? ` ${wouldHave}` : ''} Please try again.`); return; }
+    if (kind === 'predicted') { setError(`${reason ? reason.replace(/[.!?]?$/, '.') : 'The spin was refused.'}${wouldHave ? ` ${wouldHave}` : ''}`); loadConfig(); return; }
+    setError(refusalRetiredMessage(reason, { wouldHave }));
+  };
+  // A full reply: verified in this browser BEFORE anything is shown, then presented.
+  const processReply = async (data, request, entry, startedAt) => {
     const verdict = await verifySlotRound(request.receipt, data);
     setLastRound(data); setLastReceipt(request.receipt); setLastVerdict(verdict);
-    if (!verdict.ok) { settleReels(); setCommitment(null); stopForVerification(C.verificationFailed); return; }
+    if (!verdict.ok) { settleReelsRef.current(); setCommitment(null); updateOpenLock(entry.serverSeedHash, { refused: true, counted: true }); stopForVerification(C.verificationFailed); return; }
     try { rememberRevealedSeed(data.fairness.serverSeedHash); } catch { /* storage full: the server never reuses a seed */ }
+    forgetOpenLock(entry.serverSeedHash);
     const next = data.fairness.nextCommitment;
     let revealed = []; try { revealed = readRevealedHashes(); } catch { revealed = []; }
     if (isNextCommitmentSafe(next, { serverSeedHash: request.receipt.serverSeedHash, clientSeedBase: request.receipt.clientSeedBase }, revealed)) setCommitment(Object.freeze({ ...next }));
@@ -326,6 +441,46 @@ export default function SlotsApp() {
       else setTimeout(() => { if (autoRef.current && !blockedRef.current) spinRef.current?.(); }, 400);
     }
   };
+  const settleReelsRef = useRef(() => {});
+
+  // The spin: receipt and open lock saved BEFORE the post, verified in this browser BEFORE anything is shown.
+  const spin = async () => {
+    const c = commitmentRef.current;
+    if (!ready || !isCommitmentValid(c)) return;
+    ensureAudioContext();
+    let request, entry;
+    try {
+      request = createSlotRequest(c, bet, mode, { balanceBefore: balance }); saveSlotReceipt(request.receipt);
+      // ...and the lock with the random value about to be sent, so it is checked even if this page closes.
+      entry = rememberOpenLock({ identity: identity(), serverSeedHash: c.serverSeedHash, clientSeed: c.clientSeed, nonce: c.nonce, clientEntropy: request.body.clientEntropy, requestId: request.receipt.requestId });
+    } catch (e) { setError(e.message); stopAuto(); return; }
+    setError(null); setNotice(null);
+    setPhase('spinning'); setCommittedStake(bet); setBanner(null); setCelebration(null); setDoor(false);
+    setActiveLine(null); setWinCells([]); setDimming(false); setScatterHot(false); setAnticipationFrom(null); setFreeMode(false);
+    setSpinKey((k) => k + 1); setReelStates(Array(SLOT_MATH.reels).fill('spinning'));
+    sfx.spinLoopStart();
+    guard.announce();
+    const startedAt = performance.now();
+    settleReelsRef.current = () => { setReelStates(ALL_STOPPED); sfx.spinLoopStop(); setCommittedStake(0); setPhase('idle'); };
+    const bodyText = JSON.stringify(request.body);
+    const { resp, data } = await postJsonWithTimeout(`${SLOT_API}/spin`, bodyText);
+    if (!resp || (resp.ok && !data)) { // lost reply: the server may or may not have played it
+      stopAuto();
+      await recoverLostReply({ entry, request, bodyText, startedAt });
+      return;
+    }
+    if (!resp.ok) {
+      stopAuto();
+      const reason = typeof data?.error === 'string' ? data.error : '';
+      // A 409 other_tab is only predicted when THIS browser saw another tab play just now (BroadcastChannel or
+      // heartbeat); on the server's word alone it is counted and the lock retired, like any other refusal.
+      const otherTabSeen = otherTabSeenRecently({ lastForeignAt: guard.foreignAt(), otherTabRecently: (now, w) => otherTabRecently(session.tabId, now, undefined, w) });
+      const kind = classifySpinRefusal(resp.status, reason, data?.code, { otherTabSeen });
+      await handleRefusal({ kind, reason, code: data?.code, entry, request, bodyText, startedAt });
+      return;
+    }
+    await processReply(data, request, entry, startedAt);
+  };
   spinRef.current = spin;
   const toggleAuto = () => {
     if (autoSpin) { stopAuto(); return; }
@@ -334,6 +489,13 @@ export default function SlotsApp() {
     spin();
   };
   useEffect(() => () => { cancelAnimationFrame(rafRef.current); sfx.spinLoopStop(); sfx.ambientStop(); }, []);
+  // The OS motion setting can change while the page is open.
+  useEffect(() => {
+    const mq = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    if (!mq?.addEventListener) return undefined;
+    const on = () => setReducedMotion(mq.matches);
+    mq.addEventListener('change', on); return () => mq.removeEventListener('change', on);
+  }, []);
   // Hidden tab: particles pause and the ambient bed stops; back in view they resume.
   useEffect(() => {
     const on = () => { setHidden(document.hidden); if (document.hidden) sfx.ambientStop(); else if (sfx.unlocked()) sfx.ambientStart(); };
@@ -376,7 +538,7 @@ export default function SlotsApp() {
     error && { kind: 'error', className: 'game-error', title: toastTitle('error', error, blocked), text: error, dismissible: !blocked, testid: 'slot-error' },
   ].filter(Boolean);
 
-  return <div className={`slot-app casino-app noselect layout-${layout}`} data-layout={layout} data-phase={phase} data-background-locked={anyModal || undefined} data-hidden={hidden || undefined}>
+  return <div className={`slot-app casino-app noselect layout-${layout}`} data-layout={layout} data-phase={phase} data-background-locked={anyModal || undefined} data-hidden={hidden || undefined} data-reduced-motion={reducedMotion || undefined}>
     <GameHeader page="slot" layout={layout} inert={anyModal}
       balanceText={balanceText} mode={mode} modeInfo={modeInfo} modeDisabled={busy || autoSpin} onMode={chooseMode}
       lock={{ hash: commitment?.serverSeedHash || null, status: lastVerdict ? (lastVerdict.ok ? 'ok' : 'bad') : '', onTap: () => setSheet({ tab: 'fairness' }), title: 'The lock for your next spin, shown before you bet. Tap to see the fairness details.' }}
@@ -403,7 +565,7 @@ export default function SlotsApp() {
               {burstKey > 0 && phase === 'presenting' && banner?.kind === 'win' && <div key={`coins-${burstKey}`} className="slot-coins" aria-hidden="true">
                 {COIN_BURST.slice(0, mobile ? 8 : 14).map((c, i) => <i key={i} style={{ '--dx': c.dx, '--dy': c.dy, '--rot': c.rot, '--t': c.t, '--delay': c.delay }} />)}
               </div>}
-              {celebration && <div key={`rain-${spinKey}`} className="slot-rain" aria-hidden="true">
+              {celebration && !celebration.reduced && <div key={`rain-${spinKey}`} className="slot-rain" aria-hidden="true">
                 {COIN_RAIN.slice(0, mobile ? 10 : 20).map((c, i) => <i key={i} style={{ '--x': c.x, '--d': c.d, '--delay': c.delay, '--drift': c.drift, '--rot': c.rot }} />)}
               </div>}
               {banner && banner.kind !== 'win' && <motion.div key={`${banner.kind}-${spinKey}`} className={`slot-banner slot-banner-${banner.kind}`} data-testid="slot-banner" role="status"

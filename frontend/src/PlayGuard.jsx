@@ -8,11 +8,13 @@ export function usePlayGuard({ game, tabId }) {
   const [covered, setCovered] = useState(false);
   const [foreign, setForeign] = useState(null);
   const timerRef = useRef(0);
+  const foreignAtRef = useRef(null); // when another tab last announced a spin (read synchronously by the refusal check)
   useEffect(() => {
     if (!tabId) return undefined;
     const guard = createPlayGuard({ game, tab: tabId });
     guardRef.current = guard;
     const off = guard.onForeign((m) => {
+      foreignAtRef.current = m.at;
       setForeign(m); setCovered(true);
       clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => setCovered(false), coverRemainingMs(m.at));
@@ -21,7 +23,8 @@ export function usePlayGuard({ game, tabId }) {
   }, [game, tabId]);
   const announce = useCallback(() => guardRef.current?.announce(), []);
   const dismiss = useCallback(() => { clearTimeout(timerRef.current); setCovered(false); }, []);
-  return { announce, covered, foreign, dismiss };
+  const foreignAt = useCallback(() => foreignAtRef.current, []);
+  return { announce, covered, foreign, foreignAt, dismiss };
 }
 
 // The cover itself: sits over the reels or the felt (the parent is position: relative).

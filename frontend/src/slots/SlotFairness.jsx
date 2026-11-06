@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { lockBackgroundScroll } from '../modalScrollLock.js';
 import { fairnessCopy } from './slotCopy.js';
+import { buildSlotProof, slotProofFileName } from './slotProof.js';
 
 // The fairness sheet of the last round, in the same shape as the roulette one: three tiles
 // (Locked > You spin > Opened), one sentence, a verdict, and a 'Check it yourself' dropdown with the
@@ -40,8 +41,9 @@ export function SlotFairnessBody({ round, receipt, verdict, idPrefix = 'slot' })
     <button type="button" className="fair-btn fair-btn-ghost fair-btn-small" onClick={() => copy(id, String(value))}>{copied === id ? c.copied : c.copy}</button>
   </div>;
   const downloadProof = () => {
-    const blob = new Blob([JSON.stringify({ version: 'slots-1', receipt, round }, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `gods-of-power-round-${round?.roundId || 'last'}.json`; a.click();
+    // The flat shape verify-slots.mjs reads: the reply plus the terms saved before the bet (slotProof.js).
+    const blob = new Blob([JSON.stringify(buildSlotProof(round, receipt), null, 2)], { type: 'application/json' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = slotProofFileName(round); a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   };
   return <div className="slot-fairness-body" data-testid={`${idPrefix}-fairness-body`} data-status={status}>
