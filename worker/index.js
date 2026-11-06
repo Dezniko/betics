@@ -86,20 +86,21 @@ const GATE_COOKIE = '__Host-staging_gate';
 async function stagingGate(request, env, url) {
   const want = await sha256(`${env.STAGING_GATE}:gate`);
   const have = (request.headers.get('Cookie') || '').split(';').map((p) => p.trim()).find((p) => p.startsWith(`${GATE_COOKIE}=`))?.slice(GATE_COOKIE.length + 1);
-  if (have === want) return null;
+  if (have && sameSecret(have, want)) return null;
   if (request.method === 'POST' && url.pathname === '/staging-gate') {
     const form = await request.formData().catch(() => null);
     const given = form ? String(form.get('password') || '') : '';
     if (given && sameSecret(given, env.STAGING_GATE)) {
-      const back = typeof form.get('back') === 'string' && /^\/[^\s]*$/.test(form.get('back')) ? form.get('back') : '/';
+      const back = typeof form.get('back') === 'string' && /^\/(?![\/\\])[^\s]*$/.test(form.get('back')) ? form.get('back') : '/';
       return new Response(null, { status: 303, headers: { Location: back, 'Set-Cookie': `${GATE_COOKIE}=${want}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${30 * 86400}` } });
     }
   }
   if (url.pathname.startsWith('/api/')) return json({ error: 'staging gate' }, 401);
   const html = `<!doctype html><html lang="en"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><meta name="robots" content="noindex" /><title>qu-BETICS staging</title>
 <style>body{margin:0;min-height:100dvh;display:grid;place-items:center;background:#06060a;color:#ede9e1;font-family:system-ui,sans-serif}form{display:grid;gap:12px;width:min(320px,90vw);padding:28px;border-radius:16px;background:#0f0f16;border:1px solid rgba(255,255,255,.08)}h1{margin:0;font-size:14px;letter-spacing:.2em;color:#d6b06a;text-transform:uppercase}input{padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:#06060a;color:#ede9e1;font-size:16px}button{padding:12px;border-radius:10px;border:0;background:linear-gradient(100deg,#a63cff,#5a4bff,#22c7ff);color:#fff;font-weight:700;font-size:15px}</style></head>
-<body><form method="post" action="/staging-gate"><h1>Staging</h1><input type="hidden" name="back" value="${url.pathname.replace(/"/g, '')}" /><input type="password" name="password" placeholder="Password" autofocus autocomplete="current-password" /><button type="submit">Enter</button></form></body></html>`;
-  return new Response(html, { status: 401, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': ROBOTS } });
+<body><form method="post" action="/staging-gate"><h1>Staging</h1><input type="hidden" name="back" value="${url.pathname.replace(/[^A-Za-z0-9\/_.-]/g, '')}" /><input type="password" name="password" placeholder="Password" autofocus autocomplete="current-password" /><button type="submit">Enter</button></form></body></html>`;
+  return new Response(html, { status: 401, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': ROBOTS,
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'", 'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' } });
 }
 // Constant-time comparison for shared secrets.
 function sameSecret(given, expected) {
@@ -690,7 +691,7 @@ export class DemoCasino {
             const outcome = JSON.parse(row.outcome_json || '{}');
             return db.prepare(`INSERT OR IGNORE INTO rounds (id, player_id, game_id, math_id, config_version, stake_cents, payout_cents, outcome, bets_json, fairness_json, currency, real_money, country, device, created_at)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(`${playerId}:${row.id}`, playerId, row.game_id, row.math_id, row.config_version,
-              row.stake_cents, row.payout_cents, JSON.stringify({ pocket: outcome.pocket, color: outcome.color }), row.bet_json,
+              row.stake_cents, row.payout_cents, JSON.stringify(outcome.pocket != null ? { pocket: outcome.pocket, color: outcome.color } : outcome), row.bet_json,
               JSON.stringify({ serverSeed: row.server_seed, serverSeedHash: row.server_seed_hash, clientSeed: row.client_seed, nonce: row.nonce }),
               row.currency, row.real_money, row.country, row.device, row.created_at);
           }),
@@ -1005,7 +1006,7 @@ export class DemoCasino {
     const math = config ? mathOption(config.mathId) : STANDARD;
     const key = idempotencyKey(request, body);
     // Bind the entire JSON input, including unused fields, with key order ignored.
-    const fingerprint = JSON.stringify(canonicalInput(body));
+    const fingerprint = JSON.stringify(canonicalInput({ ...body, game: 'roulette' })); // the game is part of the fingerprint: a key replayed on another game's route is refused
     return this.ctx.storage.transactionSync(() => {
       if (key !== null) {
         const cached = this.one('SELECT * FROM idempotency WHERE request_key = ?', key);
@@ -1105,7 +1106,7 @@ export class DemoCasino {
     const config = context.config || null;
     const math = SLOT_MATH;
     const key = idempotencyKey(request, body);
-    const fingerprint = JSON.stringify(canonicalInput(body));
+    const fingerprint = JSON.stringify(canonicalInput({ ...body, game: 'godsofpower' })); // same key on the roulette route is 409, never another game's reply
     return this.ctx.storage.transactionSync(() => {
       if (key !== null) {
         const cached = this.one('SELECT * FROM idempotency WHERE request_key = ?', key);

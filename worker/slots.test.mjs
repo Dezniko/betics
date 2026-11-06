@@ -175,6 +175,12 @@ test('demo round: money moves once, the round is stored, and the revealed seed r
     assert.equal(round.stake_cents, 2000);
     assert.equal(round.payout_cents, d.totalPayoutCents);
     assert.deepEqual(JSON.parse(round.outcome_json).spins.map((s) => s.stops), d.spins.map((s) => s.stops));
+    // The central copy (what the admin reads) carries the whole slot outcome, not roulette's pocket/colour.
+    const central = p.rows("SELECT outcome FROM rounds WHERE game_id = 'godsofpower'")[0];
+    assert.ok(central, 'copied to the central rounds table');
+    const co = JSON.parse(central.outcome);
+    assert.equal(co.game, 'godsofpower');
+    assert.deepEqual(co.spins.map((s) => s.stops), d.spins.map((s) => s.stops));
     const ledger = obj.sql.exec('SELECT type, amount_cents FROM ledger WHERE round_id = ?', round.id).toArray();
     assert.deepEqual(ledger.map((l) => l.type), ['bet_reserve', d.totalPayoutCents > 0 ? 'bet_settle_win' : 'bet_settle_loss']);
     const replay = playRound({ stake: 2000, uint32At: makeUint32At(d.fairness.serverSeed, d.fairness.clientSeed, d.fairness.nonce), math: SLOT_MATH });
@@ -206,6 +212,20 @@ test('replays, reused entropy, stale locks and bad stakes', async () => {
     assert.equal(obj.one("SELECT COUNT(*) AS n FROM rounds").n, 1);
     assert.equal((await p.spin(cookie, 2001)).status, 400);
     assert.equal((await p.spin(cookie, 100)).status, 400);
+    // A slot requestId replayed on the roulette route never returns the slot's reply.
+    const slotReq = { stake: 2000, requestId: randomUUID(), expectedCommitment: (await p.call('/api/fairness/commitment', { cookie })).data, clientEntropy: randomBytes(32).toString('hex') };
+    const played = await p.call('/api/games/godsofpower/spin', { cookie, body: slotReq });
+    assert.equal(played.status, 200);
+    const cross = await p.call('/api/games/roulette/spin', { cookie, body: { ...slotReq, bets: [{ type: 'red', amountCents: 100 }] } });
+    assert.equal(cross.status, 409, JSON.stringify(cross.data));
+    // The admin's max house loss applies to the slot like roulette: cap minus stake above it is refused.
+    p.DB.raw.prepare("UPDATE games SET max_house_loss_cents = 3000000, config_version = config_version + 1 WHERE id = 'godsofpower'").run();
+    clearConfigCache();
+    const overLoss = await p.spin(cookie, 4000);
+    assert.equal(overLoss.status, 400); assert.match(overLoss.data.error, /over the table limit/);
+    assert.equal((await p.spin(cookie, 2001)).status, 400);
+    p.DB.raw.prepare("UPDATE games SET max_house_loss_cents = 2000000000, config_version = config_version + 1 WHERE id = 'godsofpower'").run();
+    clearConfigCache();
     assert.equal((await p.spin(cookie, 2000, 'demo', { mathId: 'other' })).status, 409);
     // Roulette still spins on the same session (once the one-game window has passed).
     const realNow = obj.now; obj.now = () => realNow.call(obj) + 10_000;
@@ -356,6 +376,10 @@ test('staging gate: with STAGING_GATE set every page and API needs the password 
     assert.equal(ok.status, 303); assert.equal(ok.headers.get('location'), '/godsofpower');
     const cookie = ok.headers.get('set-cookie').split(';')[0];
     assert.equal((await p.call('/api/session', { body: {}, cookie })).status, 200);
+    const openRedirect = await worker.fetch(new Request(`https://${HOST}/staging-gate`, { method: 'POST', body: new URLSearchParams({ password: 'open-sesame', back: '//evil.example/x' }) }), p.env, { waitUntil() {} });
+    assert.equal(openRedirect.headers.get('location'), '/', 'protocol relative back is ignored');
+    assert.match(page.headers.get('content-security-policy') || '', /frame-ancestors 'none'/);
+    assert.equal(page.headers.get('x-frame-options'), 'DENY');
     delete p.env.STAGING_GATE;
     assert.equal((await p.call('/api/session', { body: {} })).status, 200, 'no gate without the var');
   } finally { p.restore(); }

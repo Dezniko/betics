@@ -23,6 +23,7 @@ export function checkSlotLimits(stake, config, math = SLOT_MATH) {
   if (!validStake(stake, math)) return { status: 400, code: 'bad_stake', error: 'Please pick one of the bet amounts shown.' };
   if (stake < config.minStakeCents) return { status: 400, code: 'min_stake', error: `The bet must be at least ${usd(config.minStakeCents)}.` };
   if (stake > config.maxStakeCents) return { status: 400, code: 'max_stake', error: `The bet can be at most ${usd(config.maxStakeCents)}.` };
+  if (maxPayoutUnits(stake, math) - stake > config.maxHouseLossCents) return { status: 400, code: 'max_loss', error: 'This bet is over the table limit. Lower the bet.' };
   if (maxPayoutUnits(stake, math) > config.maxWinCents) return { status: 400, code: 'max_win', error: `This bet could win more than ${usd(config.maxWinCents)}, the most one round can pay. Lower the bet.` };
   return null;
 }
