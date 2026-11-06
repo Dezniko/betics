@@ -1,6 +1,6 @@
 /* The shared header (GameHeader.jsx): lobby, roulette and Gods of Power. Dark luxury, neon only on the
-   active Real/Demo segment and the guest profile icon, gold for the balance. Desktop and landscape:
-   one row; portrait phones: two short rows (headerModel.js). Every rule is scoped to .gh. */
+   active Real/Demo segment and the guest profile icon, gold for the balance and the Connect wallet pill.
+   Desktop and landscape: one row; portrait phones: two short rows (headerModel.js). Every rule is scoped to .gh. */
 .gh { position: relative; flex: 0 0 auto; box-sizing: border-box; width: 100%; max-width: 1100px; margin: 0 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; color: var(--bx-text); }
 .gh-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; width: 100%; }
 .gh-group { display: flex; align-items: center; gap: 10px; min-width: 0; }
@@ -39,14 +39,19 @@
 .gh-portrait .gh-pill, .gh-portrait .lobby-link, .gh-portrait .commitment-button, .gh-landscape .gh-pill, .gh-landscape .lobby-link, .gh-landscape .commitment-button { height: 26px; padding: 0 9px; font-size: 11px !important; gap: 5px; }
 .gh-portrait .commitment-button code, .gh-landscape .commitment-button code { font-size: 10px; }
 
-/* narrow portrait phones (320 to 374): the Lobby pill keeps its icon only, the lock pill drops its icon */
-@media (max-width: 374px) {
+/* portrait phones under 400 px: the Lobby pill keeps its icon only (row two also carries the switch, the mute and the bell) */
+@media (max-width: 399px) {
   .gh-portrait .lobby-link { padding: 0 8px; }
   .gh-portrait .lobby-link .lobby-link-text { display: none; }
-  .gh-portrait .commitment-button { padding: 0 8px; gap: 4px; font-size: 10px !important; }
+}
+/* narrow portrait phones (320 to 374): the lock pill drops its icon and everything on row two tightens */
+@media (max-width: 374px) {
+  .gh-portrait .commitment-button { padding: 0 7px; gap: 4px; font-size: 10px !important; }
   .gh-portrait .commitment-button .commitment-status { display: none; }
-  .gh-portrait .commitment-button code { font-size: 9.5px; }
-  .gh-portrait .mode-switch > button { padding: 4px 6px; font-size: 9px; }
+  .gh-portrait .commitment-button code { font-size: 9px; letter-spacing: .02em; }
+  .gh-portrait .mode-switch > button { padding: 4px 5px; font-size: 8.5px; letter-spacing: 0; }
+  .gh-portrait .gh-row2 .gh-group { gap: 5px; }
+  .gh-portrait .gh-row2 .gh-icon { width: 26px; height: 26px; }
 }
 
 /* balance: label in Michroma, gold amount, right aligned */
@@ -55,18 +60,19 @@
 .gh-amount { display: block; font: 800 19px/1 Inter, system-ui, sans-serif; letter-spacing: .01em; white-space: nowrap; font-variant-numeric: tabular-nums;
   background: linear-gradient(180deg, #fff2c2, #d6b06a 60%, #b8862a); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .gh-balance-note { display: block; margin-top: 4px; font-size: 10px; line-height: 1; color: var(--bx-mute); white-space: nowrap; }
-.gh-landscape .gh-balance { flex-direction: row; align-items: baseline; gap: 7px; }
-.gh-landscape .gh-balance .balance-word { margin: 0; }
+/* landscape: the label sits over the amount (a label beside it collided with the lock pill at 844x390); the in play note stays beside the amount */
+.gh-landscape .gh-balance { display: grid; grid-template-columns: auto auto; justify-items: end; align-items: baseline; column-gap: 7px; row-gap: 3px; }
+.gh-landscape .gh-balance .balance-word { grid-column: 1 / -1; margin: 0; font-size: 7px; letter-spacing: .14em; }
 .gh-landscape .gh-amount { font-size: 16px; }
 .gh-landscape .gh-amount .long { font-size: 13px; }
 .gh-landscape .gh-logo, .gh-desktop .gh-logo { flex: 0 0 auto; }
 .gh-landscape .gh-balance { min-width: 0; }
 .gh-landscape .gh-balance-note { margin: 0; }
 .gh-portrait .gh-balance { flex: 0 1 auto; min-width: 0; overflow: hidden; }
-.gh-portrait .gh-balance .balance-word { margin-bottom: 4px; }
+.gh-portrait .gh-balance .balance-word { margin-bottom: 4px; font-size: 7px; letter-spacing: .14em; }
 .gh-portrait .gh-amount { font-size: 16px; max-width: 100%; }
 .gh-portrait .gh-amount .long { font-size: 14px; }
-@media (max-width: 360px) { .gh-portrait .gh-amount { font-size: 14px; } .gh-portrait .gh-amount .long { font-size: 12px; } }
+@media (max-width: 360px) { .gh-portrait .gh-amount { font-size: 14px; } .gh-portrait .gh-amount .long { font-size: 12px; } .gh-portrait .gh-balance .balance-word { font-size: 6.5px; letter-spacing: .1em; } }
 
 /* Real / Demo: two segments, neon on the active one */
 .gh .mode-switch { display: inline-flex; flex: none; padding: 2px; border-radius: 999px; border: 1px solid var(--bx-line); background: #0b0b12; }
@@ -83,26 +89,44 @@
 @media (hover: hover) { .gh .gh-icon:hover { border-color: rgba(241, 220, 170, 0.6); box-shadow: 0 0 10px rgba(120, 90, 255, 0.25); } }
 .gh-portrait .gh-icon, .gh-landscape .gh-icon { width: 28px; height: 28px; }
 
-/* profile pill: avatar + short address, or a neon person icon + Connect wallet. Same shape either way. */
-.gh-profile { display: inline-flex; flex: none; min-width: 0; }
-.gh .gh-chip { display: inline-flex; align-items: center; gap: 8px; height: 34px; min-height: 0; padding: 0 10px 0 3px; border-radius: 999px; box-sizing: border-box;
+/* notification bell: the same round button as the mute; lit gold with a red count while unread */
+.gh-bell-wrap { display: inline-flex; flex: none; }
+.gh .gh-bell { position: relative; overflow: visible; }
+.gh .gh-bell.lit { color: var(--bx-gold-hi); border-color: rgba(214, 176, 106, 0.7); box-shadow: 0 0 10px rgba(214, 176, 106, 0.35); animation: gh-bell-pulse 2s ease-in-out infinite; }
+.gh .gh-bell-count { position: absolute; top: -5px; right: -5px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; box-sizing: border-box; display: grid; place-items: center;
+  background: #e11d48; color: #fff; font: 800 9.5px/1 Inter, system-ui, sans-serif; letter-spacing: 0; border: 1.5px solid #0b0b12; box-shadow: 0 0 6px rgba(225, 29, 72, 0.6); pointer-events: none; }
+.gh-portrait .gh-bell-count, .gh-landscape .gh-bell-count { top: -4px; right: -4px; min-width: 15px; height: 15px; padding: 0 3px; font-size: 8.5px; }
+@keyframes gh-bell-pulse { 0%, 100% { box-shadow: 0 0 6px rgba(214, 176, 106, 0.25); } 50% { box-shadow: 0 0 14px rgba(214, 176, 106, 0.6); } }
+@media (prefers-reduced-motion: reduce) { .gh .gh-bell.lit { animation: none; } }
+
+/* profile controls. Connected: one chip, avatar + short address, gold border, hard purple shadow.
+   Guest: two separate controls with a gap, a gold Connect wallet pill (the primary action, same gold
+   border and purple shadow as the chip, soft gold fill) and, last on the right, a round neon person icon. */
+.gh-profile { display: inline-flex; align-items: center; gap: 8px; flex: none; min-width: 0; }
+.gh .gh-chip, .gh .gh-connect { display: inline-flex; align-items: center; gap: 8px; height: 34px; min-height: 0; border-radius: 999px; box-sizing: border-box;
   border: 1px solid rgba(214, 176, 106, 0.6); background: #0b0b12; color: var(--bx-text); box-shadow: 3px 3px 0 rgba(166, 60, 255, 0.45);
   font-family: Inter, system-ui, sans-serif; font-size: 12px; font-weight: 600; letter-spacing: 0; white-space: nowrap; touch-action: manipulation; transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease; }
+.gh .gh-chip { padding: 0 10px 0 3px; }
 .gh .gh-chip .wallet-chip-avatar { flex: none; width: 28px; height: 28px; border-radius: 50%; box-shadow: 0 0 0 1.5px rgba(214, 176, 106, 0.55); }
 .gh .wallet-chip-text { font-family: Inter, system-ui, sans-serif; }
-@media (hover: hover) { .gh .gh-chip:hover { transform: translate(-1px, -1px); box-shadow: 4px 4px 0 rgba(166, 60, 255, 0.6), 0 0 18px rgba(34, 211, 255, 0.14); border-color: rgba(241, 220, 170, 0.85); } }
-.gh .gh-chip:active, .gh-profile.open .gh-chip { transform: translate(1px, 1px); box-shadow: 1px 1px 0 rgba(166, 60, 255, 0.6); }
-.gh .gh-guest { cursor: default; }
-.gh .gh-person { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--bx-neon); color: #fff; box-shadow: 0 0 12px rgba(130, 80, 255, 0.55); touch-action: manipulation; transition: transform .12s ease; }
-.gh .gh-person svg { width: 14px; height: 14px; }
-.gh .gh-person:active { transform: scale(.92); }
-.gh .gh-connect { height: 100%; padding: 0 2px 0 0; background: transparent; color: var(--bx-text); font: 600 12px/1 Inter, system-ui, sans-serif; white-space: nowrap; touch-action: manipulation; }
+.gh .gh-connect { padding: 0 13px; border-color: rgba(214, 176, 106, 0.8); background: linear-gradient(180deg, rgba(214, 176, 106, 0.22), rgba(214, 176, 106, 0.1)); color: var(--bx-gold-hi); font-weight: 700; }
 .gh .gh-connect:disabled { opacity: .55; }
+@media (hover: hover) {
+  .gh .gh-chip:hover, .gh .gh-connect:not(:disabled):hover { transform: translate(-1px, -1px); box-shadow: 4px 4px 0 rgba(166, 60, 255, 0.6), 0 0 18px rgba(34, 211, 255, 0.14); border-color: rgba(241, 220, 170, 0.85); }
+  .gh .gh-connect:not(:disabled):hover { background: linear-gradient(180deg, rgba(214, 176, 106, 0.3), rgba(214, 176, 106, 0.14)); }
+}
+.gh .gh-chip:active, .gh-profile.open .gh-chip, .gh .gh-connect:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 rgba(166, 60, 255, 0.6); }
+.gh .gh-person { border-color: transparent; background: var(--bx-neon); color: #fff; box-shadow: 0 0 12px rgba(130, 80, 255, 0.55); transition: transform .12s ease, box-shadow .12s ease; }
+.gh .gh-person svg { width: 16px; height: 16px; }
+.gh .gh-person:active, .gh-profile.open .gh-person { transform: scale(.92); }
+@media (hover: hover) { .gh .gh-person:hover { border-color: rgba(241, 220, 170, 0.6); box-shadow: 0 0 16px rgba(130, 80, 255, 0.75); } }
 .gh .wc-short { display: none; }
+.gh-portrait .gh-profile, .gh-landscape .gh-profile { gap: 6px; }
 .gh-portrait .gh-chip, .gh-landscape .gh-chip { height: 30px; gap: 6px; padding: 0 9px 0 2px; }
-.gh-portrait .gh-chip .wallet-chip-avatar, .gh-landscape .gh-chip .wallet-chip-avatar, .gh-portrait .gh-person, .gh-landscape .gh-person { width: 24px; height: 24px; }
-.gh-landscape .gh-connect, .gh-portrait .gh-connect { font-size: 11px; }
-/* portrait: the connected pill is the avatar alone; the guest pill keeps a short Connect */
+.gh-portrait .gh-connect, .gh-landscape .gh-connect { height: 28px; padding: 0 10px; font-size: 11px; }
+.gh-portrait .gh-chip .wallet-chip-avatar, .gh-landscape .gh-chip .wallet-chip-avatar { width: 24px; height: 24px; }
+.gh-portrait .gh-person svg, .gh-landscape .gh-person svg { width: 14px; height: 14px; }
+/* portrait: the connected chip is the avatar alone; the guest pill reads a short Connect */
 .gh-portrait .gh-profile.connected .gh-chip { padding: 2px; gap: 0; }
 .gh-portrait .gh-profile.connected .wallet-chip-text { display: none; }
 .gh-portrait .wc-long { display: none; } .gh-portrait .wc-short { display: inline; }

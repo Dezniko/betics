@@ -3,24 +3,24 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { HEADER_ORDER, PAGES, headerItems, phoneRows, headerLayout, profilePill, sameOrder } from '../src/headerModel.js';
+import { HEADER_ORDER, PAGES, headerItems, phoneRows, headerLayout, profilePill, balanceLabel, bellBadge, sameOrder } from '../src/headerModel.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const src = (f) => fs.readFileSync(path.join(here, '..', 'src', f), 'utf8');
 
 // ---- the header model: which items show where, in which order ----
-test('one header order for every page: logo, Lobby, Next lock, balance, Real/Demo, mute, profile', () => {
-  assert.deepEqual([...HEADER_ORDER], ['logo', 'lobby', 'lock', 'balance', 'mode', 'mute', 'profile']);
+test('one header order for every page: logo, Lobby, Next lock, balance, Real/Demo, mute, bell, profile', () => {
+  assert.deepEqual([...HEADER_ORDER], ['logo', 'lobby', 'lock', 'balance', 'mode', 'mute', 'bell', 'profile']);
   assert.deepEqual([...PAGES], ['lobby', 'roulette', 'slot']);
 });
 
-test('the lobby has no Lobby pill and no lock; the games have both; the switch shows only when connected', () => {
-  assert.deepEqual(headerItems({ page: 'lobby' }), ['logo', 'balance', 'mute', 'profile']);
-  assert.deepEqual(headerItems({ page: 'lobby', connected: true }), ['logo', 'balance', 'mode', 'mute', 'profile']);
-  assert.deepEqual(headerItems({ page: 'roulette' }), ['logo', 'lobby', 'lock', 'balance', 'mute', 'profile']);
-  assert.deepEqual(headerItems({ page: 'slot', connected: true }), ['logo', 'lobby', 'lock', 'balance', 'mode', 'mute', 'profile']);
+test('the lobby has no Lobby pill and no lock; the games have both; the Real/Demo switch and the bell show for everyone', () => {
+  assert.deepEqual(headerItems({ page: 'lobby' }), ['logo', 'balance', 'mode', 'mute', 'bell', 'profile'], 'a guest sees the switch (Real starts the connect flow)');
+  assert.deepEqual(headerItems({ page: 'lobby', connected: true }), headerItems({ page: 'lobby' }), 'connected changes nothing');
+  assert.deepEqual(headerItems({ page: 'roulette' }), ['logo', 'lobby', 'lock', 'balance', 'mode', 'mute', 'bell', 'profile']);
+  assert.deepEqual(headerItems({ page: 'slot', connected: true }), ['logo', 'lobby', 'lock', 'balance', 'mode', 'mute', 'bell', 'profile']);
   assert.deepEqual(headerItems({ page: 'slot', connected: true }), headerItems({ page: 'roulette', connected: true }), 'both games show the same items');
-  assert.deepEqual(headerItems({ page: 'roulette', lock: false }), ['logo', 'lobby', 'balance', 'mute', 'profile'], 'a game without a lock yet');
+  assert.deepEqual(headerItems({ page: 'roulette', lock: false }), ['logo', 'lobby', 'balance', 'mode', 'mute', 'bell', 'profile'], 'a game without a lock yet');
   assert.throws(() => headerItems({ page: 'terms' }), /unknown page/);
 });
 
@@ -32,13 +32,24 @@ test('the common items keep the same order across the three pages, connected or 
   assert.ok(!sameOrder(['logo', 'balance', 'profile'], ['balance', 'logo', 'profile']));
 });
 
-test('portrait phones: row one is logo, balance and profile; row two Lobby, lock, Real/Demo and mute', () => {
+test('portrait phones: row one is logo, balance and profile; row two Lobby, lock, Real/Demo, mute and the bell', () => {
   const rows = phoneRows(headerItems({ page: 'roulette', connected: true }));
   assert.deepEqual(rows.row1, ['logo', 'balance', 'profile']);
-  assert.deepEqual(rows.row2, ['lobby', 'lock', 'mode', 'mute']);
+  assert.deepEqual(rows.row2, ['lobby', 'lock', 'mode', 'mute', 'bell'], 'the bell sits beside the mute: on row one it clipped the amount at 320 px');
   const lobby = phoneRows(headerItems({ page: 'lobby' }));
   assert.deepEqual(lobby.row1, ['logo', 'balance', 'profile']);
-  assert.deepEqual(lobby.row2, ['mute'], 'a guest in the lobby still gets the mute on row two');
+  assert.deepEqual(lobby.row2, ['mode', 'mute', 'bell'], 'a guest in the lobby gets the switch, the mute and the bell on row two');
+});
+
+test('the balance label names the balance: DEMO BALANCE or REAL BALANCE (a guest is always on Demo)', () => {
+  assert.equal(balanceLabel('demo'), 'DEMO BALANCE');
+  assert.equal(balanceLabel('real'), 'REAL BALANCE');
+  assert.equal(balanceLabel(undefined), 'DEMO BALANCE');
+});
+
+test('the bell badge is the unread count, capped at 99+, nothing for zero', () => {
+  assert.equal(bellBadge(0), null); assert.equal(bellBadge(undefined), null); assert.equal(bellBadge(-2), null);
+  assert.equal(bellBadge(1), '1'); assert.equal(bellBadge(3), '3'); assert.equal(bellBadge(99), '99'); assert.equal(bellBadge(100), '99+'); assert.equal(bellBadge(1234), '99+');
 });
 
 test('layout from the viewport: landscape phones, portrait phones and tablets, desktop from 1000 px', () => {
@@ -65,8 +76,12 @@ test('lobby, roulette and Gods of Power render GameHeader and ProfileSheet with 
     const text = src(f);
     assert.match(text, /<GameHeader page="(lobby|roulette|slot)" layout=\{/, `${f} renders the shared header`);
     assert.match(text, /<ProfileSheet key="profile" page="(lobby|roulette|slot)" mobile=\{/, `${f} renders the shared profile sheet`);
-    assert.match(text, /useInbox\(\{ ready: !!user/, `${f} loads the inbox for the Messages row`);
+    assert.match(text, /useInbox\(\{ ready: !!user/, `${f} loads the inbox for the Messages row and the bell`);
     assert.match(text, /\{inbox\.popupNode\}/, `${f} shows the newest unread message`);
+    assert.match(text, /inbox=\{inbox\} onBell=\{openMessages\}>/, `${f} hands the inbox and the bell handler to the header`);
+    assert.match(text, /expand: 'messages' \}\); inbox\.markSeen\(\); \}/, `${f}: the bell opens the Messages row and marks them seen`);
+    assert.match(text, /initialExpanded=\{sheet\.expand \|\| null\}/, `${f} passes the row to expand to the sheet`);
+    assert.ok(!text.includes('showSwitch='), `${f}: the switch is not gated on a connection any more`);
     assert.match(text, /historyContent=\{/, `${f} passes History content`);
     assert.match(text, /fairnessContent=\{/, `${f} passes Fairness content`);
     for (const gone of ['SoundQuickControls', 'SoundSettingsDialog', '<WalletPanel', 'mobile-history-trigger', 'demo-refill"', 'inbox-bell', '<Inbox ', 'fairness-label', '<LobbyLink', '<BrandLogo']) {
@@ -91,12 +106,22 @@ test('lobby, roulette and Gods of Power render GameHeader and ProfileSheet with 
   assert.match(slot, /data-testid="slot-fairness-btn"/, 'the bottom Fairness button stays');
 });
 
-test('GameHeader: the profile pill is the wallet chip when connected and a person icon plus Connect wallet when not', () => {
+test('GameHeader: the wallet chip when connected; a separate gold Connect wallet pill and a round neon person icon when not; the bell; the switch for everyone', () => {
   const header = src('GameHeader.jsx');
   assert.match(header, /data-testid="wallet-chip"/);
   assert.match(header, /<span className="wallet-chip-text">\{pill\.text\}<\/span>/, 'wallet-chip textContent is the short address');
   assert.match(header, /data-testid="profile-button"/);
   assert.match(header, /data-testid="wallet-connect"/);
+  assert.ok(header.indexOf('data-testid="wallet-connect"') < header.indexOf('data-testid="profile-button"'), 'the Connect pill comes before the person icon, so the icon is the last item on the right');
+  assert.match(header, /className="gh-icon gh-person" data-testid="profile-button"/, 'the person icon is a round gh-icon like the mute');
+  assert.ok(!header.includes('gh-guest'), 'the guest controls are no longer one pill');
+  assert.match(header, /<small className="balance-word" data-testid="header-balance-label">\{balanceLabel\(mode\)\}<\/small>/, 'DEMO BALANCE or REAL BALANCE over the amount');
+  assert.match(header, /mode: <div key="mode" className="mode-switch gh-mode"/, 'the switch is not gated on showSwitch');
+  assert.match(header, /const pickMode = \(m\) => \{ if \(m === 'real' && !connected\) onConnect\?\.\(\); else onMode\?\.\(m\); \};/, 'a guest tapping Real starts the connect flow');
+  assert.match(header, /aria-disabled=\{connected && !modeInfo\?\.realAvailable \? true : undefined\}/, 'Real never looks disabled for a guest');
+  assert.match(header, /className=\{`gh-icon gh-bell\$\{badge \? ' lit' : ''\}`\} data-testid="header-bell"/, 'the bell is a round gh-icon like the mute');
+  assert.match(header, /\{badge && <span className="gh-bell-count" data-testid="bell-count">\{badge\}<\/span>\}/, 'the red count only while unread');
+  assert.match(header, /onClick=\{onBell \|\| onProfile\}/);
   assert.match(header, /data-testid="header-balance" data-mode=\{mode\}/);
   assert.match(header, /data-balance-target="header"/, 'the win count-up still finds the header balance');
   assert.match(src('SoundControls.jsx'), /data-testid="header-mute"/); assert.match(header, /<MuteButton className="gh-icon"/);

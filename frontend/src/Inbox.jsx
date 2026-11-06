@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { inboxLink } from './inboxLink.js';
 
@@ -20,10 +20,13 @@ function MessageCard({ m, onOpen, onClose }) {
 }
 
 // Loads the inbox while `ready`, refreshes every minute, shows the newest unread message once as a
-// popup (never mid-round: `quiet`). `markSeen()` is called when the Messages row is opened.
+// popup (never mid-round: `quiet`); the other unread ones stay unread behind the header bell, which
+// shows `unseen`, instead of popping up one after another. A message that arrives later pops up in
+// turn. `markSeen()` is called when the bell is tapped or the Messages row is opened.
 export function useInbox({ ready, quiet }) {
   const [box, setBox] = useState({ messages: [], unseen: 0 });
   const [popup, setPopup] = useState(null);
+  const offeredRef = useRef(new Set()); // ids already offered as a popup, or waiting behind the bell
   const load = useCallback(async () => {
     try { const r = await fetch(`${API}/inbox`); if (r.ok) setBox(await r.json()); } catch { /* offline: keep what we have */ }
   }, []);
@@ -35,8 +38,11 @@ export function useInbox({ ready, quiet }) {
   }, [ready, load]);
   useEffect(() => {
     if (popup || quiet) return;
-    const next = box.messages.find((m) => !m.seen);
-    if (next) { setPopup(next); post(`/inbox/${next.id}/seen`); setBox((b) => ({ messages: b.messages.map((m) => m.id === next.id ? { ...m, seen: true } : m), unseen: Math.max(0, b.unseen - 1) })); }
+    const unseen = box.messages.filter((m) => !m.seen);
+    const next = unseen.find((m) => !offeredRef.current.has(m.id));
+    if (!next) return;
+    unseen.forEach((m) => offeredRef.current.add(m.id)); // one popup per batch; the rest wait behind the bell
+    setPopup(next); post(`/inbox/${next.id}/seen`); setBox((b) => ({ messages: b.messages.map((m) => m.id === next.id ? { ...m, seen: true } : m), unseen: Math.max(0, b.unseen - 1) }));
   }, [box, popup, quiet]);
   const clicked = (m) => { post(`/inbox/${m.id}/click`); setPopup(null); };
   const dismiss = (m) => { post(`/inbox/${m.id}/dismiss`); setBox((b) => ({ ...b, messages: b.messages.filter((x) => x.id !== m.id) })); };

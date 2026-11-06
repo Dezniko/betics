@@ -367,6 +367,7 @@ export default function SlotsApp() {
 
   const chooseMode = (m) => { if (busy || autoSpin) return; const reason = session.chooseMode(m); if (reason) setNotice(reason); else { setError(null); setNotice(null); } };
   const connect = () => { setSheet(null); session.requestConnect(); };
+  const openMessages = () => { setSheet({ tab: 'wallet', expand: 'messages' }); inbox.markSeen(); };
   const spinLabel = phase === 'idle' ? C.spin : C.spinning;
   const toasts = [
     gameClosed && { kind: 'closed', className: 'game-notice', testid: 'game-closed', title: toastTitle('closed'), text: config.maintenanceMessage || C.gameClosed },
@@ -377,9 +378,10 @@ export default function SlotsApp() {
 
   return <div className={`slot-app casino-app noselect layout-${layout}`} data-layout={layout} data-phase={phase} data-background-locked={anyModal || undefined} data-hidden={hidden || undefined}>
     <GameHeader page="slot" layout={layout} inert={anyModal}
-      balanceText={balanceText} mode={mode} modeInfo={modeInfo} showSwitch={!!profile} modeDisabled={busy || autoSpin} onMode={chooseMode}
+      balanceText={balanceText} mode={mode} modeInfo={modeInfo} modeDisabled={busy || autoSpin} onMode={chooseMode}
       lock={{ hash: commitment?.serverSeedHash || null, status: lastVerdict ? (lastVerdict.ok ? 'ok' : 'bad') : '', onTap: () => setSheet({ tab: 'fairness' }), title: 'The lock for your next spin, shown before you bet. Tap to see the fairness details.' }}
-      profile={profile} profileOpen={!!sheet} onProfile={() => setSheet({ tab: 'wallet' })} onConnect={connect} connecting={session.walletBusy} connectDisabled={busy || autoSpin}>
+      profile={profile} profileOpen={!!sheet} onProfile={() => setSheet({ tab: 'wallet' })} onConnect={connect} connecting={session.walletBusy} connectDisabled={busy || autoSpin}
+      inbox={inbox} onBell={openMessages}>
       <GameToast toasts={toasts} onDismiss={(kind) => { if (kind === 'error') setError(null); if (kind === 'info') setNotice(null); if (kind === 'elsewhere') session.clearElsewhere(); }} />
     </GameHeader>
 
@@ -442,7 +444,7 @@ export default function SlotsApp() {
       </motion.div>}
     </AnimatePresence>
     <AnimatePresence>
-      {sheet && <ProfileSheet key="profile" page="slot" mobile={mobile} initialTab={sheet.tab} onClose={() => setSheet(null)}
+      {sheet && <ProfileSheet key="profile" page="slot" mobile={mobile} initialTab={sheet.tab} initialExpanded={sheet.expand || null} onClose={() => setSheet(null)}
         profile={profile} wallet={user} mode={mode} balance={user ? shownBalance : null}
         onConnect={connect} connecting={session.walletBusy} onDisconnect={async () => { setSheet(null); await session.disconnectWallet(); }} disconnectDisabled={busy || autoSpin}
         deposit={null} onTopUp={() => setNotice('Top ups are made on the roulette page for now.')}

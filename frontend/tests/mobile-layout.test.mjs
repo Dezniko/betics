@@ -54,5 +54,11 @@ test('the shared header: two rows on portrait phones, one row otherwise, the log
   assert.match(header, /\.gh-portrait \.gh-profile\.connected \.wallet-chip-text \{ display: none; \}/, 'portrait: avatar only, the text stays in the DOM for the tests');
   assert.match(header, /\.gh-portrait \.wc-long \{ display: none; \} \.gh-portrait \.wc-short \{ display: inline; \}/);
   assert.match(header, /@media \(max-width: 374px\)/, 'narrow phones tighten the pills');
+  assert.match(header, /@media \(max-width: 399px\) \{\n  \.gh-portrait \.lobby-link \{ padding: 0 8px; \}\n  \.gh-portrait \.lobby-link \.lobby-link-text \{ display: none; \}/, 'the Lobby pill is icon only under 400px, so row two fits the switch, mute and bell at 390');
+  assert.match(header, /\.gh-profile \{ display: inline-flex; align-items: center; gap: 8px;/, 'the guest Connect pill and the person icon are separate controls with a gap');
+  assert.match(header, /\.gh-portrait \.gh-profile, \.gh-landscape \.gh-profile \{ gap: 6px; \}/, 'at least a 6 px gap on phones');
+  assert.match(header, /@keyframes gh-bell-pulse/, 'the lit bell pulses');
+  assert.match(header, /@media \(prefers-reduced-motion: reduce\) \{ \.gh \.gh-bell\.lit \{ animation: none; \} \}/, 'no pulse for reduced motion');
+  assert.match(header, /\.gh \.gh-bell-count \{ position: absolute; top: -5px; right: -5px;/, 'the count sits at the top right of the bell');
   assert.ok(!/commitment-label \{ display: none/.test(header), 'Next lock stays readable text on every phone (the suites wait for it)');
 });

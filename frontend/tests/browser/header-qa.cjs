@@ -3,9 +3,13 @@
 // For each of /, /roulette and /godsofpower at seven viewports (portrait phones 320 to 430, a landscape
 // phone, a tablet and a desktop): pass the 18+ gate, no page scroll, every header item inside the
 // viewport, no two header items overlapping, the logo never below 60 px wide, the header items in the
-// same order on all three pages, the profile sheet (not connected) opens inside the viewport with the
-// page locked and the three tabs, closes on Escape; then the same measurements with a connected header
-// (a mocked /api/wallet/me and a long balance). Screenshots under QA_OUT, default <tmp>/header-qa.
+// same order on all three pages, the guest's Connect wallet pill and person icon are two controls with a
+// gap, the Real/Demo switch shows for a guest and tapping Real opens the connect notice, the balance label
+// reads DEMO BALANCE, the bell has no badge, the profile sheet (not connected) opens inside the viewport
+// with the page locked and the three tabs, closes on Escape; then the same measurements with a connected
+// header (a mocked /api/wallet/me, a long balance, REAL BALANCE, 3 unread messages: the newest pops up and
+// is marked seen, the bell badge counts the other 2; tapping the bell opens the sheet on Messages and the
+// badge goes). Screenshots under QA_OUT, default <tmp>/header-qa.
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict'), os = require('node:os');
 const APP_URL = process.env.APP_URL || 'http://127.0.0.1:8789', CDP_URL = process.env.CDP_URL || 'http://localhost:9354';
 const OUT = process.env.QA_OUT || path.join(process.env.TMPDIR || os.tmpdir(), 'header-qa'); fs.mkdirSync(OUT, { recursive: true });
@@ -18,6 +22,8 @@ const CONNECTED_MOCK = `(()=>{const f=window.fetch;const j=(v)=>new Response(JSO
   const profile={address:${JSON.stringify(ADDR)},chainId:1,realEnabled:true,hasDeposited:true,withdrawalsOpen:true,deposits:[],withdrawals:[],firstConnectedAt:'2026-10-28 10:00:00',minDepositCents:100000,minWithdrawalCents:1500000,withdrawalFeeCents:50000,termsAcceptedAt:'2026-10-28 10:00:00',email:null,emailConsent:false};
   window.fetch=async function(input,init){const u=new URL(String(input&&input.url||input),location.href);const p=u.pathname;
     if(p==='/api/wallet/me')return j(profile);
+    if(p==='/api/inbox')return j({messages:[1,2,3].map(i=>({id:900+i,title:'Message '+i,body:'Body of message '+i,seen:false,buttonUrl:null,buttonLabel:null})),unseen:3});
+    if(p.startsWith('/api/inbox/'))return j({ok:true});
     if(p==='/api/wallet'||p==='/api/session'){const r=await f.apply(this,arguments);let d={};try{d=await r.clone().json()}catch{}return j({...d,balanceCents:123456789,realTicsCents:98765432199,demoAllowed:true})}
     return f.apply(this,arguments)};})();`;
 
@@ -69,7 +75,10 @@ const MEASURE = `(()=>{const items=[...document.querySelectorAll('header [data-h
   const header=document.querySelector('header').getBoundingClientRect();
   const connect=document.querySelector('[data-testid=wallet-connect]'),chip=document.querySelector('[data-testid=wallet-chip]');
   return {items,over,outside,logoW:logo.width,headerH:header.height,headerW:header.width,order:items.map(i=>i.id),scrollH:document.scrollingElement.scrollHeight,scrollW:document.scrollingElement.scrollWidth,
-    pill:(connect||chip)?.innerText.trim()||null,chipText:chip?.textContent||null,balance:document.querySelector('[data-testid=header-balance]').textContent,mode:document.querySelector('[data-testid=mode-switch]')?.dataset.mode||null}})()`;
+    pill:(connect||chip)?.innerText.trim()||null,chipText:chip?.textContent||null,balance:document.querySelector('[data-testid=header-balance]').textContent,mode:document.querySelector('[data-testid=mode-switch]')?.dataset.mode||null,
+    label:document.querySelector('[data-testid=header-balance-label]')?.textContent||null,bell:!!document.querySelector('[data-testid=header-bell]'),badge:document.querySelector('[data-testid=bell-count]')?.textContent||null,
+    guest:(()=>{const p=document.querySelector('[data-testid=profile-button]');if(!connect||!p)return null;const a=connect.getBoundingClientRect(),b=p.getBoundingClientRect();return {gap:b.left-a.right,connectH:a.height,connectW:a.width,personW:b.width,personH:b.height,personLast:b.right>a.right}})(),
+    labelFits:(()=>{const l=document.querySelector('[data-testid=header-balance-label]'),blk=document.querySelector('[data-testid=header-balance-block]');if(!l)return false;const a=l.getBoundingClientRect(),b=blk.getBoundingClientRect();return l.scrollWidth<=l.clientWidth+0.5&&a.left>=b.left-0.5&&a.right<=b.right+0.5})()}})()`;
 
 async function measure(x, w, h, label, page) {
   await x.ev('document.fonts.ready.then(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))))');
@@ -95,9 +104,23 @@ async function measure(x, w, h, label, page) {
       await x.waitFor(READY[page], label);
       const m = await measure(x, w, h, label, page);
       assert.equal(m.pill, w < 1000 && !(w > h) ? 'Connect' : 'Connect wallet', `${label}: guest pill text`);
-      assert.equal(m.mode, null, `${label}: a guest has no Real/Demo switch`);
+      assert.equal(m.mode, 'demo', `${label}: a guest sees the Real/Demo switch on Demo`);
+      assert.equal(m.label, 'DEMO BALANCE', `${label}: guest balance label`);
+      assert.ok(m.labelFits, `${label}: the balance label is clipped`);
+      assert.ok(m.guest && m.guest.gap >= 6, `${label}: Connect pill and person icon need a 6 px gap ${JSON.stringify(m.guest)}`);
+      assert.ok(m.guest.connectH >= 28 && m.guest.personLast && Math.abs(m.guest.personW - m.guest.personH) < 1, `${label}: Connect pill tappable, round person icon last ${JSON.stringify(m.guest)}`);
+      assert.ok(m.bell && m.badge === null, `${label}: bell present without a badge (${m.badge})`);
       (orders[`${w}x${h}`] ||= {})[page] = m.order;
       await x.screenshot(`${page}-${w}x${h}-guest`);
+      // a guest tapping Real starts the connect flow: the connect notice opens, the mode stays Demo
+      await x.click('[data-testid=mode-real]');
+      await x.waitFor('!!document.querySelector("[data-testid=connect-notice]")', `${label} connect notice from Real`);
+      assert.equal(await x.ev('document.querySelector("[data-testid=mode-switch]").dataset.mode'), 'demo', `${label}: Real as a guest must not switch`);
+      assert.ok(!(await x.ev('!!document.querySelector("w3m-modal.open")')), `${label}: no wallet modal before Continue`);
+      await x.screenshot(`${page}-${w}x${h}-guest-real`);
+      await x.key('Escape');
+      await x.waitFor('!document.querySelector("[data-testid=connect-notice]")', `${label} connect notice closed`);
+      await sleep(300);
       // 2. profile sheet for a guest
       await x.click('[data-testid=profile-button]');
       await x.waitFor('!!document.querySelector("[data-testid=wallet-panel]")', `${label} sheet`);
@@ -126,12 +149,36 @@ async function measure(x, w, h, label, page) {
       // 3. connected header with a long balance
       x = await open(w, h, { url: APP_URL + route, mock: true });
       await x.waitFor(READY[page] + ' && !!document.querySelector("[data-testid=wallet-chip]")', `${label} connected`);
+      // 3 unread: the newest pops up (and is marked seen), the bell counts the other two
+      await x.waitFor('!!document.querySelector("[data-testid=inbox-popup]")', `${label} inbox popup`);
+      await sleep(300);
       const c = await measure(x, w, h, `${label} connected`, page);
       assert.equal(c.chipText, '0x13bd...b784', `${label}: wallet-chip text is the short address`);
       assert.equal(c.mode, 'real', `${label}: connected header shows the Real/Demo switch in Real`);
+      assert.equal(c.label, 'REAL BALANCE', `${label}: connected balance label`);
+      assert.ok(c.labelFits, `${label}: the balance label is clipped`);
+      assert.equal(c.badge, '2', `${label}: bell badge counts the unread messages not shown in the popup`);
+      assert.ok(await x.ev('document.querySelector("[data-testid=header-bell]").classList.contains("lit")'), `${label}: bell lit`);
+      const badgeBox = await x.ev('(()=>{const b=document.querySelector("[data-testid=header-bell]").getBoundingClientRect(),c=document.querySelector("[data-testid=bell-count]").getBoundingClientRect();return {w:c.width,h:c.height,topRight:c.right>b.right-b.width/2&&c.top<b.top+b.height/2,inside:c.left>=0&&c.top>=0&&c.right<=innerWidth}})()');
+      assert.ok(badgeBox.w >= 14 && badgeBox.h >= 14 && badgeBox.topRight && badgeBox.inside, `${label}: badge geometry ${JSON.stringify(badgeBox)}`);
+      await x.screenshot(`${page}-${w}x${h}-connected-popup`);
+      await x.click('[data-testid=inbox-popup] .inbox-btn');
+      await x.waitFor('!document.querySelector("[data-testid=inbox-popup]")', `${label} popup closed`);
+      await sleep(300);
+      assert.equal(await x.ev('document.querySelector("[data-testid=bell-count]")?.textContent||null'), '2', `${label}: badge after closing the popup`);
       assert.ok(/987,654,321\.99|987\.7M|987,654,322/.test(c.balance), `${label}: long balance shown (${c.balance})`);
       assert.ok(orders[`${w}x${h}`][page].filter((i) => i !== 'mode').join() === c.order.filter((i) => i !== 'mode').join(), `${label}: connected order differs`);
       await x.screenshot(`${page}-${w}x${h}-connected`);
+      // the bell opens the sheet on Messages and marks them seen
+      await x.click('[data-testid=header-bell]');
+      await x.waitFor('!!document.querySelector("[data-testid=wallet-panel]") && !!document.querySelector("[data-testid=profile-messages-body]")', `${label} bell opens Messages`);
+      await sleep(600);
+      const bell = await x.ev('(()=>{const b=document.querySelector("[data-testid=profile-messages-body]"),p=document.querySelector("[data-testid=wallet-panel]").getBoundingClientRect(),r=b.getBoundingClientRect();return {visible:b.checkVisibility()&&r.height>20&&r.top>=p.top-0.5&&r.top<p.bottom,count:b.querySelectorAll(".inbox-card").length,badge:document.querySelector("[data-testid=bell-count]")?.textContent||null,note:document.querySelector("[data-testid=profile-messages] .profile-row-note")?.textContent||null,expanded:document.querySelector("[data-testid=profile-messages]").getAttribute("aria-expanded")}})()');
+      assert.ok(bell.visible && bell.count === 3 && bell.badge === null && bell.expanded === 'true' && bell.note === '3', `${label}: Messages body ${JSON.stringify(bell)}`);
+      await x.screenshot(`${page}-${w}x${h}-bell-sheet`);
+      await x.key('Escape');
+      await x.waitFor('!document.querySelector("[data-testid=wallet-panel]")', `${label} bell sheet closed`);
+      await sleep(400);
       await x.click('[data-testid=wallet-chip]');
       await x.waitFor('!!document.querySelector("[data-testid=wallet-panel]") && !!document.querySelector("[data-testid=tab-topup]")', `${label} connected sheet`);
       await sleep(600);

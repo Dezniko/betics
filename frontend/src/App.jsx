@@ -109,7 +109,7 @@ export default function App() {
   const [verifyOpen, setVerifyOpen] = useState(false);
   const [verifyResult, setVerifyResult] = useState(null);
   const [verifyLoading, setVerifyLoading] = useState(false);
-  const [sheet, setSheet] = useState(null); // { tab } while the profile pop-up is open
+  const [sheet, setSheet] = useState(null); // { tab, expand } while the profile pop-up is open
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null); // neutral info (e.g. table cleared), not an error
   const [lastBets, setLastBets] = useState([]);
@@ -1309,6 +1309,7 @@ export default function App() {
   const inbox = useInbox({ ready: !!user, quiet: busy || autoSpin });
   const openProfile = (tab = 'wallet') => setSheet({ tab });
   const connectFromHeader = () => { setSheet(null); requestConnect(); };
+  const openMessages = () => { setSheet({ tab: 'wallet', expand: 'messages' }); inbox.markSeen(); };
   const blockShortcuts = verifyOpen || !!detailRound || !!sheet || connectNoticeOpen || !ageOk;
   const anyModalOpen = blockShortcuts || (!mobileGame && !!winPopup);
   useLayoutEffect(() => lockBackgroundScroll(anyModalOpen), [anyModalOpen]);
@@ -1438,9 +1439,10 @@ export default function App() {
     <div data-background-locked={anyModalOpen} style={controlsHeight ? { '--controls-height': `${controlsHeight}px` } : undefined} className={`casino-app min-h-screen text-[#ede9e1] ${mobileGame ? 'mobile-game' : ''} ${landscape ? 'phone-landscape' : ''} ${portraitPhone ? 'phone-portrait' : ''} ${landscape ? 'px-3 py-1.5' : 'px-3 sm:px-6 py-4 sm:py-8'}`}>
       <GameHeader page="roulette" layout={headerLayoutName} inert={anyModalOpen}
         balanceText={user ? (portraitPhone ? fmtShort(displayBalanceCents) : fmt(displayBalanceCents)) : '-'} balanceNote={totalStaked > 0 ? `${fmt(totalStaked)} in play` : null}
-        mode={mode} modeInfo={modeInfo} showSwitch={!!profile} modeDisabled={busy || autoSpin} onMode={chooseMode}
+        mode={mode} modeInfo={modeInfo} modeDisabled={busy || autoSpin} onMode={chooseMode}
         lock={{ hash: commitment?.serverSeedHash || null, status: autoVerify ? (autoVerify.ok ? 'ok' : 'bad') : '', onTap: () => openProfile('fairness'), title: 'The lock for your next spin, shown before you bet. Tap to copy it, get a new one, or change your lucky word.' }}
-        profile={profile} profileOpen={!!sheet} onProfile={() => openProfile('wallet')} onConnect={connectFromHeader} connecting={walletBusy} connectDisabled={busy || autoSpin}>
+        profile={profile} profileOpen={!!sheet} onProfile={() => openProfile('wallet')} onConnect={connectFromHeader} connecting={walletBusy} connectDisabled={busy || autoSpin}
+        inbox={inbox} onBell={openMessages}>
         <GameToast onDismiss={(kind) => { if (kind === 'error') setError(null); if (kind === 'info') setNotice(null); if (kind === 'elsewhere') setElsewhere(null); }} toasts={[
           gameClosed && { kind: 'closed', className: 'game-notice', testid: 'game-closed', title: toastTitle('closed'), text: gameConfig.maintenanceMessage || 'This game is having a short break. Please check back soon.' },
           !gameClosed && tableInvalid && { kind: 'closed', className: 'game-error', testid: 'payout-table-invalid', title: 'Betting paused', text: 'The payout table from the server does not look right, so betting is paused. Please reload the page or contact support.' },
@@ -1645,7 +1647,7 @@ export default function App() {
         </div>
       )}
       <AnimatePresence>
-        {sheet && <ProfileSheet key="profile" page="roulette" mobile={mobileGame} initialTab={sheet.tab} onClose={() => setSheet(null)}
+        {sheet && <ProfileSheet key="profile" page="roulette" mobile={mobileGame} initialTab={sheet.tab} initialExpanded={sheet.expand || null} onClose={() => setSheet(null)}
           profile={profile} wallet={user} mode={mode} balance={user ? displayBalanceCents : null}
           onConnect={connectFromHeader} connecting={walletBusy} onDisconnect={async () => { setSheet(null); await disconnectWallet(); }} disconnectDisabled={busy || autoSpin}
           deposit={deposit} onTopUp={topUp} onRefresh={async () => { await Promise.all([refreshProfile(), refreshWallet()]); }}

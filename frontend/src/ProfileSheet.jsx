@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import Avatar from './Avatar.jsx';
 import SupportLink from './Support.jsx';
@@ -32,7 +32,7 @@ function Row({ row, open, onToggle }) {
 }
 
 export default function ProfileSheet({
-  open = true, onClose, mobile, page = 'lobby', initialTab = 'wallet',
+  open = true, onClose, mobile, page = 'lobby', initialTab = 'wallet', initialExpanded = null, // a row key open from the start (the bell opens 'messages')
   profile = null, wallet = null, mode = 'demo', balance = null,
   onConnect, connecting = false, onDisconnect, disconnectDisabled = false,
   deposit = null, onTopUp, onRefresh,
@@ -40,8 +40,15 @@ export default function ProfileSheet({
 }) {
   const connected = !!profile?.address;
   const [tab, setTab] = useState(MAIN_TABS.some(([k]) => k === initialTab) ? initialTab : 'wallet');
-  const [expanded, setExpanded] = useState(null);
+  const [expanded, setExpanded] = useState(initialExpanded);
   const [disconnecting, setDisconnecting] = useState(false);
+  const rowsRef = useRef(null);
+  // Opened on a row (the bell opens Messages): bring that row and its body into view inside the sheet.
+  useEffect(() => {
+    if (!initialExpanded || !rowsRef.current) return undefined;
+    const t = setTimeout(() => rowsRef.current?.querySelector('.profile-row-wrap.open')?.scrollIntoView({ block: 'start', behavior: 'auto' }), 60);
+    return () => clearTimeout(t);
+  }, [initialExpanded]);
   const soundSummary = useSoundSummary();
   useLayoutEffect(() => lockBackgroundScroll(open), [open]);
   useEffect(() => {
@@ -101,7 +108,7 @@ export default function ProfileSheet({
           {tab === 'history' && (historyContent || <p className="fair-note">Your recent rounds show here inside each game.</p>)}
           {tab === 'fairness' && (fairnessContent || <p className="fair-note">Every round is locked before you bet and opened after it, so you can check the result yourself.</p>)}
         </div>
-        <div className="profile-rows-list" data-testid="profile-rows">
+        <div className="profile-rows-list" data-testid="profile-rows" ref={rowsRef}>
           {allRows.map((row) => <Row key={row.key} row={row} open={expanded === row.key} onToggle={() => { toggle(row.key); if (expanded !== row.key) row.onExpand?.(); }} />)}
         </div>
         <div className="profile-foot-links">

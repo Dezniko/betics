@@ -107,14 +107,15 @@ const pass = (msg) => console.log('PASS', msg);
   // 2. Guest: Demo, 100,000 demo $TICS, Real unavailable with a reason, $TICS everywhere.
   await x.waitFor(`document.querySelector('[data-testid=header-balance]').textContent.includes('$TICS')`);
   assert.equal(await x.text('[data-testid=header-balance]'), '100,000.00 $TICS');
-  // A guest plays Demo and has no Real/Demo switch (it shows once a wallet is connected, in the shared header).
-  assert.equal(await x.ev(`!!document.querySelector('[data-testid=mode-switch]')`), false, 'no switch for a guest');
+  // A guest plays Demo; the Real/Demo switch shows on Demo and its label reads DEMO BALANCE (Real as a guest starts the connect flow).
+  assert.equal(await x.ev(`document.querySelector('[data-testid=mode-switch]').dataset.mode`), 'demo', 'a guest sees the switch on Demo');
   assert.equal(await x.ev(`document.querySelector('[data-testid=header-balance]').dataset.mode`), 'demo');
+  assert.equal(await x.ev(`document.querySelector('[data-testid=header-balance-label]').textContent`), 'DEMO BALANCE');
   assert.equal(await x.ev(`/\\$\\d/.test(document.body.innerText)`), false, 'no dollar amounts');
   assert.ok(await x.ev(`!!document.querySelector('button[title="100 $TICS chip (key 5)"]')`), 'chips are $TICS');
   assert.equal(await x.ev(`document.querySelector('[data-testid=wallet-connect]').innerText.trim()`), 'Connect wallet');
   shots.push(await x.shot('header-guest-desktop'));
-  pass('guest shows Demo with 100,000.00 $TICS, no Real/Demo switch, $TICS chips, Connect wallet');
+  pass('guest shows DEMO BALANCE 100,000.00 $TICS, the Real/Demo switch on Demo, $TICS chips, Connect wallet');
 
   // 3. Connect + SIWE sign-in; the __Host- Secure wallet cookie sticks on http://127.0.0.1.
   // The first Connect in this browser shows the custody / fairness / beta notice; Continue needs the tick.
@@ -187,6 +188,7 @@ const pass = (msg) => console.log('PASS', msg);
   await x.click('[data-testid=profile-close]'); await sleep(400);
   await x.waitFor(`document.querySelector('[data-testid=mode-switch]').dataset.mode==='real'&&!document.querySelector('[data-testid=mode-demo]')`, 5000, 'real forced');
   assert.equal(await x.text('[data-testid=header-balance]'), '5,000.00 $TICS');
+  assert.equal(await x.ev(`document.querySelector('[data-testid=header-balance-label]').textContent`), 'REAL BALANCE');
   shots.push(await x.shot('header-funded-desktop'));
   pass('top up sent as ERC-20 transfer of 5000e18 to the casino wallet, Confirming 1 of 2, Credited, Demo hidden, Real forced');
 
@@ -250,7 +252,7 @@ const pass = (msg) => console.log('PASS', msg);
   // 8. Disconnect returns to the guest Demo session.
   await x.click('[data-testid=wallet-disconnect]');
   await x.waitFor(`!!document.querySelector('[data-testid=wallet-connect]')&&!document.querySelector('[data-testid=wallet-panel]')`, 10000, 'disconnected');
-  await x.waitFor(`document.querySelector('[data-testid=header-balance]').dataset.mode==='demo'&&!document.querySelector('[data-testid=mode-switch]')`, 8000, 'demo after disconnect');
+  await x.waitFor(`document.querySelector('[data-testid=header-balance]').dataset.mode==='demo'&&document.querySelector('[data-testid=mode-switch]').dataset.mode==='demo'`, 8000, 'demo after disconnect');
   assert.equal(await x.text('[data-testid=header-balance]'), '100,000.00 $TICS');
   assert.equal((await api(x, '/api/wallet/me')).status, 401);
   await ready(x);

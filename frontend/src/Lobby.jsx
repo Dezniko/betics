@@ -79,8 +79,9 @@ export default function Lobby() {
   const { user, profile, mode, modeInfo, balance } = session;
   const [notice, setNotice] = useState(null);
   const [error, setError] = useState(null);
-  const [sheet, setSheet] = useState(null); // { tab } while the profile pop-up is open
+  const [sheet, setSheet] = useState(null); // { tab, expand } while the profile pop-up is open
   const inbox = useInbox({ ready: !!user, quiet: false });
+  const openMessages = () => { setSheet({ tab: 'wallet', expand: 'messages' }); inbox.markSeen(); };
   useEffect(() => { if (session.sessionError) { setError(session.sessionError); session.clearSessionError(); } }, [session.sessionError]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (session.elsewhere) setSheet(null); }, [session.elsewhere]);
   const anyModal = !!sheet || session.connectNoticeOpen || !session.ageOk;
@@ -95,8 +96,9 @@ export default function Lobby() {
 
   return <div className={`lobby casino-app noselect layout-${layout}`} data-layout={layout} data-background-locked={anyModal || undefined}>
     <GameHeader page="lobby" layout={layout} inert={anyModal}
-      balanceText={balanceText} mode={mode} modeInfo={modeInfo} showSwitch={!!profile} onMode={chooseMode}
-      profile={profile} profileOpen={!!sheet} onProfile={() => setSheet({ tab: 'wallet' })} onConnect={connect} connecting={session.walletBusy}>
+      balanceText={balanceText} mode={mode} modeInfo={modeInfo} onMode={chooseMode}
+      profile={profile} profileOpen={!!sheet} onProfile={() => setSheet({ tab: 'wallet' })} onConnect={connect} connecting={session.walletBusy}
+      inbox={inbox} onBell={openMessages}>
       <GameToast toasts={toasts} onDismiss={(kind) => { if (kind === 'error') setError(null); if (kind === 'info') setNotice(null); if (kind === 'elsewhere') session.clearElsewhere(); }} />
     </GameHeader>
 
@@ -117,7 +119,7 @@ export default function Lobby() {
     </main>
 
     <AnimatePresence>
-      {sheet && <ProfileSheet key="profile" page="lobby" mobile={mobile} initialTab={sheet.tab} onClose={() => setSheet(null)}
+      {sheet && <ProfileSheet key="profile" page="lobby" mobile={mobile} initialTab={sheet.tab} initialExpanded={sheet.expand || null} onClose={() => setSheet(null)}
         profile={profile} wallet={user} mode={mode} balance={user ? balance : null}
         onConnect={connect} connecting={session.walletBusy} onDisconnect={async () => { setSheet(null); await session.disconnectWallet(); }}
         deposit={null} onTopUp={() => setNotice('Top ups are made on the roulette page for now.')}
