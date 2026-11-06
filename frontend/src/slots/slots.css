@@ -255,4 +255,8 @@ body:has(.slot-app) { height: 100dvh; min-height: 0; overflow: hidden; overscrol
 @media (prefers-reduced-motion: reduce) {
   .slot-dust, .slot-streaks, .slot-rain, .slot-coins { display: none; }
   .slot-shine, .slot-star, .slot-vault::before, .slot-spin::after, .slot-x2 { animation: none; }
+  .slot-tile.blur { filter: none; }
 }
+/* the same, driven by the page's own reading of the setting (SlotsApp data-reduced-motion) */
+.slot-app[data-reduced-motion] .slot-dust, .slot-app[data-reduced-motion] .slot-streaks, .slot-app[data-reduced-motion] .slot-rain, .slot-app[data-reduced-motion] .slot-coins { display: none; }
+.slot-app[data-reduced-motion] .slot-tile.blur { filter: none; }

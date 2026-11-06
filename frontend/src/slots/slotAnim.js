@@ -18,14 +18,32 @@ export const TIMING = Object.freeze({
   settleMs: 200,          // small pause at the end before controls return
 });
 
+// Reduced motion (prefers-reduced-motion: reduce): the reels settle quickly, the slow-down tease is gone,
+// wins count up in a fraction of the time, and the page draws no coin shower or blur streaks.
+export const REDUCED_COUNT_SCALE = 0.35;
+export function reducedMotionTiming(timing = TIMING) {
+  return Object.freeze({ ...timing, spinMs: 350, staggerMs: 90, anticipationFactor: 1, lineMs: 220, lineTotalCapMs: 1200, scatterWinMs: 300, vaultMs: 700, retriggerMs: 350, betweenSpinsMs: 120, totalMs: 900 });
+}
+// Reads the OS setting (false where matchMedia is missing, e.g. tests and old browsers).
+export function prefersReducedMotion(win = typeof window !== 'undefined' ? window : null) {
+  try { return !!win?.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches; } catch { return false; }
+}
+// What the presentation may draw: particles only when motion is not reduced and the tab is visible.
+export function motionEffects({ reduced = false, hidden = false } = {}) {
+  const on = !reduced && !hidden;
+  return { coinBurst: on, coinRain: on, streaks: !reduced, blur: !reduced };
+}
+
 // How many vault doors (scatters) a reel column shows.
 const scattersIn = (grid, reel) => grid.reduce((n, row) => n + (row[reel] === 'S' ? 1 : 0), 0);
 
 // buildTimeline(round, { turbo, pace }) -> { steps, totalMs, tier }
 // turbo halves the reel times; pace (0..1) scales the win beats (auto spin uses 0.4 like roulette).
-export function buildTimeline(round, { turbo = false, pace = 1, math = SLOT_MATH, timing = TIMING } = {}) {
+export function buildTimeline(round, { turbo = false, pace = 1, reduced = false, math = SLOT_MATH, timing: timingIn = TIMING } = {}) {
+  const timing = reduced ? reducedMotionTiming(timingIn) : timingIn;
   const reelScale = turbo ? 0.5 : 1;
   const winScale = Math.max(0.1, pace);
+  const countScale = reduced ? REDUCED_COUNT_SCALE : 1;
   const T = (ms) => Math.round(ms * reelScale);
   const W = (ms) => Math.round(ms * winScale);
   const steps = [];
@@ -78,7 +96,7 @@ export function buildTimeline(round, { turbo = false, pace = 1, math = SLOT_MATH
     }
     if (spin.winUnits > 0) {
       const tier = winTier(spin.winUnits, stake);
-      const countMs = celebrationTiming(tier, winScale).countMs;
+      const countMs = Math.round(celebrationTiming(tier, winScale).countMs * countScale);
       push({ type: 'count-up', at: t, duration: countMs, spin: si, amount: spin.winUnits, tier: tier.id, multiplier: spin.multiplier || 1 });
       t += countMs;
     }
