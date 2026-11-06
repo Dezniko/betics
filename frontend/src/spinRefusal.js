@@ -119,6 +119,7 @@ export const LOCK_RECHECK_MESSAGE = 'The lock could not be checked yet. Betting 
 export const LOST_REPLY_RECHECK_MESSAGE = 'The connection dropped before the spin was confirmed. Betting is paused while the page checks the lock again.';
 export const STALE_LOCK_RECHECK_MESSAGE = 'The server says your lock changed, but it did not show the old key. Betting is paused while the page looks for the round that used it.';
 export const LOCK_CHANGED_MESSAGE = 'The server changed the lock without showing the old key, so betting stays paused.';
+export const LOCK_IN_FLIGHT_MESSAGE = 'A spin from another tab of this browser may still be running on this lock. Betting is paused for a moment while the page checks.';
 export const LOCK_CHECK_GAVE_UP_MESSAGE = 'The page will try again when you come back to it. If this does not clear, please contact support.';
 export const EARLIER_ROUND_FAILED_MESSAGE = 'An earlier spin does not check out. Betting is stopped. Inspect the round before continuing.';
 
@@ -159,14 +160,16 @@ export function recordRefusal(budget, now = Date.now(), storage = store()) {
 export function refusalLimitReached(count, budget = 'unpredicted') { return Number.isSafeInteger(count) && count >= BUDGET_LIMITS[budget]; }
 
 // ---- locks whose random value was sent but whose key this browser has not checked yet ----
-// Entry: { identity, game, serverSeedHash, clientSeed, nonce, clientEntropy, requestId, at, refused, counted }
-// `game`: which game sent it ('roulette' | 'godsofpower'; a missing tag reads as roulette).
+// Entry: { identity, game, tab?, serverSeedHash, clientSeed, nonce, clientEntropy, requestId, at, refused, counted }
+// `game`: which game sent it ('roulette' | 'godsofpower'; a missing tag reads as roulette). `tab`: the tab
+// that sent it (tabPresence id, kept across a reload), so the same tab knows no other tab can be waiting on it.
 // `refused`: the server answered with a refusal. `counted`: already counted (or never to be counted).
 function validOpenLock(e) {
   return !!e && typeof e === 'object' && typeof e.identity === 'string' && e.identity.length > 0 && e.identity.length <= 64
     && HASH.test(e.serverSeedHash || '') && typeof e.clientSeed === 'string' && e.clientSeed.length > 0 && e.clientSeed.length <= 64
     && Number.isSafeInteger(e.nonce) && e.nonce >= 0 && HASH.test(e.clientEntropy || '') && UUID.test(e.requestId || '')
-    && Number.isFinite(e.at) && typeof e.refused === 'boolean' && typeof e.counted === 'boolean' && (e.game === undefined || GAMES.has(e.game));
+    && Number.isFinite(e.at) && typeof e.refused === 'boolean' && typeof e.counted === 'boolean' && (e.game === undefined || GAMES.has(e.game))
+    && (e.tab === undefined || (typeof e.tab === 'string' && e.tab.length > 0 && e.tab.length <= 64));
 }
 const withGame = (e) => (e.game === undefined ? { ...e, game: DEFAULT_GAME } : e);
 export function readOpenLocks(storage = store()) {
@@ -195,15 +198,22 @@ export function forgetOpenLock(hash, storage = store()) {
 export function findOpenLock(hash, identity, storage = store(), game = null) {
   return readOpenLocks(storage).find((x) => x.serverSeedHash === hash && x.identity === identity && (!game || x.game === game)) || null;
 }
-// A current lock must be opened through the reveal before betting when it saw a refusal, or when
-// its spin was sent long enough ago that no tab can still be waiting for it.
-export function mustRetireLock(entry, now = Date.now()) {
-  return !!entry && (entry.refused || now - entry.at > OPEN_LOCK_GRACE_MS);
+// A current lock must be opened through the reveal before betting when it saw a refusal, when its spin
+// was sent long enough ago that no tab can still be waiting for it, or when THIS tab sent it (`ownTab`:
+// the page that sent it was reloaded or left, so nothing is waiting for the reply any more).
+export function mustRetireLock(entry, now = Date.now(), ownTab = null) {
+  return !!entry && (entry.refused || now - entry.at > OPEN_LOCK_GRACE_MS || (!!ownTab && entry.tab === ownTab));
+}
+// How long until a fresh entry of another tab may be retired (0 when it may be now).
+export function retireWaitMs(entry, now = Date.now(), ownTab = null) {
+  if (!entry || mustRetireLock(entry, now, ownTab)) return 0;
+  return Math.max(0, entry.at + OPEN_LOCK_GRACE_MS - now) + 500;
 }
 // Locks of this player that are no longer the current lock and need a look in the round history.
 // With `game`, only that game's entries: a page never judges the other game's rounds with its own checker.
-export function locksToCheck(identity, currentHash, now = Date.now(), storage = store(), { game = null } = {}) {
-  return readOpenLocks(storage).filter((x) => x.identity === identity && x.serverSeedHash !== currentHash && (!game || x.game === game) && mustRetireLock(x, now));
+// With `tab`, this tab's own entries are checked at once (nothing else can be waiting for them).
+export function locksToCheck(identity, currentHash, now = Date.now(), storage = store(), { game = null, tab = null } = {}) {
+  return readOpenLocks(storage).filter((x) => x.identity === identity && x.serverSeedHash !== currentHash && (!game || x.game === game) && mustRetireLock(x, now, tab));
 }
 // Which game a /api/rounds row belongs to (the Durable Object row says `game`, the central copy `game_id`).
 export function roundGame(round) {

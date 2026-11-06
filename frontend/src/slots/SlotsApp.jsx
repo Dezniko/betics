@@ -15,10 +15,10 @@ import { headerLayout } from '../headerModel.js';
 import { displayedBalanceCents } from '../balanceDisplay.js';
 import { isCommitmentValid, isNextCommitmentSafe, readRevealedHashes, rememberRevealedSeed, revealAndRetireLock, fetchPlayerRounds, verifyRevealedRound } from '../fairnessClient.js';
 import { postJsonWithTimeout, classifySpinRefusal, budgetFor, recordRefusal, refusalStopMessage, refusalRetiredMessage, rememberOpenLock, updateOpenLock, forgetOpenLock, findOpenLock, findRoundForLock,
-  locksToCheck, mustRetireLock, canAcceptReloadedLock, ownRoundProblems, noteSpinPosted, OPEN_LOCK_GRACE_MS,
+  locksToCheck, mustRetireLock, retireWaitMs, canAcceptReloadedLock, ownRoundProblems, noteSpinPosted, OPEN_LOCK_GRACE_MS,
   addRefusedSlotSpin, slotWouldHaveText, otherTabSeenRecently, waitForRoundWithLock, OTHER_TAB_MESSAGE, OTHER_TAB_UNSEEN_MESSAGE, SIGN_IN_EXPIRED_MESSAGE,
   LOST_REPLY_MESSAGE, OTHER_DEVICE_MESSAGE, OTHER_DEVICE_ALONE_MESSAGE, OWN_ROUND_SWAPPED_MESSAGE, NEVER_OPENED_MESSAGE,
-  LOCK_RECHECK_MESSAGE, LOST_REPLY_RECHECK_MESSAGE, STALE_LOCK_RECHECK_MESSAGE, LOCK_CHANGED_MESSAGE, LOCK_CHECK_GAVE_UP_MESSAGE, EARLIER_ROUND_FAILED_MESSAGE } from '../spinRefusal.js';
+  LOCK_RECHECK_MESSAGE, LOST_REPLY_RECHECK_MESSAGE, STALE_LOCK_RECHECK_MESSAGE, LOCK_CHANGED_MESSAGE, LOCK_IN_FLIGHT_MESSAGE, LOCK_CHECK_GAVE_UP_MESSAGE, EARLIER_ROUND_FAILED_MESSAGE } from '../spinRefusal.js';
 import { startPresence, otherTabRecently, otherTabPlayedRecently, notePlay } from '../tabPresence.js';
 import { isSignedInElsewhere } from '../walletApi.js';
 import { winTier, celebrationTiming, countEase } from '../winCelebration.js';
@@ -385,7 +385,7 @@ export default function SlotsApp() {
   // random value it had).
   const checkOpenLocks = async (currentHash) => {
     if (!currentHash || blockedRef.current) return;
-    const list = locksToCheck(identity(), currentHash, Date.now(), undefined, { game: 'godsofpower' });
+    const list = locksToCheck(identity(), currentHash, Date.now(), undefined, { game: 'godsofpower', tab: session.tabId || null });
     if (!list.length) return;
     let rounds;
     try { rounds = await fetchRounds(); } catch { return; } // again on the next load or focus
@@ -422,7 +422,12 @@ export default function SlotsApp() {
       if (result !== 'settled' && result !== 'other') throw new Error(LOCK_CHANGED_MESSAGE);
     }
     const open = findOpenLock(c.serverSeedHash, identity());
-    if (open && mustRetireLock(open)) {
+    if (open && !mustRetireLock(open, Date.now(), session.tabId || null)) {
+      // Another tab of this browser sent a random value for this very lock seconds ago and may still be waiting
+      // for the reply: the lock is NOT accepted as it is; the recovery comes back once the grace has passed.
+      const wait = new Error(LOCK_IN_FLIGHT_MESSAGE); wait.retryInMs = retireWaitMs(open, Date.now(), session.tabId || null); throw wait;
+    }
+    if (open) {
       const swap = await openAndLog(open, 'lost', open.refused ? 'Refused before this page was reloaded' : 'The page closed before the reply',
         readSlotReceipt(open.requestId)?.stake ?? null, { serverSeedHash: c.serverSeedHash, clientSeed: c.clientSeed, nonce: c.nonce });
       if (swap.problem) { setCommitment(null); stopForVerification(swap.problem); return null; }
@@ -458,7 +463,10 @@ export default function SlotsApp() {
     } catch (e) {
       setCommitment(null);
       lockErrorRef.current = true;
-      if (attempt < RECOVER_DELAYS_MS.length) {
+      if (Number.isFinite(e.retryInMs)) { // a timed wait (another tab's fresh lock): not one of the retries
+        setError(e.message);
+        recoverTimerRef.current = setTimeout(() => recoverRef.current?.(previousHash, attempt), e.retryInMs);
+      } else if (attempt < RECOVER_DELAYS_MS.length) {
         setError(e.message);
         recoverTimerRef.current = setTimeout(() => recoverRef.current?.(previousHash, attempt + 1), RECOVER_DELAYS_MS[attempt]);
       } else setError(`${e.message} ${LOCK_CHECK_GAVE_UP_MESSAGE}`);
@@ -583,7 +591,7 @@ export default function SlotsApp() {
     try {
       request = createSlotRequest(c, bet, mode, { balanceBefore: balance }); saveSlotReceipt(request.receipt);
       // ...and the lock with the random value about to be sent, so it is checked even if this page closes.
-      entry = rememberOpenLock({ identity: identity(), serverSeedHash: c.serverSeedHash, clientSeed: c.clientSeed, nonce: c.nonce, clientEntropy: request.body.clientEntropy, requestId: request.receipt.requestId, game: 'godsofpower' });
+      entry = rememberOpenLock({ identity: identity(), serverSeedHash: c.serverSeedHash, clientSeed: c.clientSeed, nonce: c.nonce, clientEntropy: request.body.clientEntropy, requestId: request.receipt.requestId, game: 'godsofpower', ...(session.tabId ? { tab: session.tabId } : {}) });
     } catch (e) { setError(e.message); stopAuto(); return; }
     setError(null); setNotice(null);
     setPhase('spinning'); setCommittedStake(bet); setBanner(null); setCelebration(null); setDoor(false);

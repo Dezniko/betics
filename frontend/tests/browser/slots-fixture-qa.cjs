@@ -30,17 +30,24 @@ async function makeRound(want) {
 
 // mode: 'ok' (normal round) | 'refuse503' (the spin is refused, lock and balance untouched) | 'other_tab'
 // (409 other_tab from the server while this browser saw no other tab) | 'lost' (the first post never answers;
-// the round is in /api/rounds; the byte-identical replay returns the cached reply).
+// the round is in /api/rounds; the byte-identical replay returns the cached reply) | 'reload-stall' (the post
+// never answers and the server never plays it: after a reload the saved lock must be retired through rotate)
+// | 'reload-played' (the post never answers but the server played it: after a reload the round is in /api/rounds
+// and must be verified). The fixture keeps its lock and post count in sessionStorage so a reload of the same
+// tab continues the same story; localStorage is cleared only on the first load of a tab.
 function fixtureScript({ entropy, reply }, mode = 'ok') {
   const seed = reply.fairness.serverSeed, nextLock = reply.fairness.nextCommitment.serverSeedHash;
   const row = { id: reply.roundId, game: 'godsofpower', stake_cents: reply.stake, payout_cents: reply.totalPayoutCents, server_seed: seed, server_seed_hash: reply.fairness.serverSeedHash, client_seed: reply.fairness.clientSeed, client_seed_base: reply.fairness.clientSeedBase, client_entropy: reply.fairness.clientEntropy, nonce: 0, request_id: reply.requestId, real_money: 0, math_id: reply.mathId, created_at: '2026-11-06 10:00:00', status: 'settled', revealed_at: '2026-11-06 10:00:01',
     outcome_json: JSON.stringify({ game: 'godsofpower', spins: reply.spins, freeSpinsAwarded: reply.freeSpinsAwarded, freeSpinsPlayed: reply.freeSpinsPlayed, capped: reply.capped }) };
   return `(()=>{
-    const audio=localStorage.getItem('noir:audio:v1');localStorage.clear();if(audio!==null)localStorage.setItem('noir:audio:v1',audio);
+    const firstLoad=!sessionStorage.getItem('qa-fixture-loaded');sessionStorage.setItem('qa-fixture-loaded','1');
+    if(firstLoad){const audio=localStorage.getItem('noir:audio:v1');localStorage.clear();if(audio!==null)localStorage.setItem('noir:audio:v1',audio);}
     localStorage.setItem('betics:adult:v1','1');
     const reply=${JSON.stringify(reply)};const entropy=${JSON.stringify(entropy)};const mode=${JSON.stringify(mode)};const row=${JSON.stringify(row)};const nextLock=${JSON.stringify(nextLock)};const seed=${JSON.stringify(seed)};
-    window.qaFixture={label:'controlled fixture (not live data)',posts:0,savedBeforePost:false,rotates:[],roundsReads:0,bodies:[]};
-    let lock={serverSeedHash:reply.fairness.serverSeedHash,clientSeed:reply.fairness.clientSeedBase,nonce:0};
+    const st=JSON.parse(sessionStorage.getItem('qa-fixture-state')||'null')||{posts:0,lock:{serverSeedHash:reply.fairness.serverSeedHash,clientSeed:reply.fairness.clientSeedBase,nonce:0},rotates:[]};
+    window.qaFixture={label:'controlled fixture (not live data)',posts:st.posts,savedBeforePost:false,rotates:st.rotates,roundsReads:0,bodies:[],firstLoad};
+    let lock=st.lock;
+    const saveState=()=>sessionStorage.setItem('qa-fixture-state',JSON.stringify({posts:qaFixture.posts,lock,rotates:qaFixture.rotates}));
     const grv=crypto.getRandomValues.bind(crypto);
     crypto.getRandomValues=(arr)=>{if(arr instanceof Uint8Array&&arr.length===32){for(let i=0;i<32;i++)arr[i]=parseInt(entropy.slice(i*2,i*2+2),16);return arr;}return grv(arr);};
     crypto.randomUUID=()=>reply.requestId;
@@ -51,8 +58,8 @@ function fixtureScript({ entropy, reply }, mode = 'ok') {
       if(p==='/api/wallet/me')return json({error:'no wallet'},401);
       if(p==='/api/wallet')return json({balanceCents:reply.balanceAfterCents});
       if(p.endsWith('/fairness/commitment'))return json(lock);
-      if(p.endsWith('/fairness/rotate')){const b=JSON.parse(opt.body);qaFixture.rotates.push(b);if(b.expectedCommitment.serverSeedHash!==lock.serverSeedHash)return json({error:'stale or mismatched expectedCommitment'},409);const retired={serverSeed:seed,serverSeedHash:lock.serverSeedHash};lock={serverSeedHash:nextLock,clientSeed:lock.clientSeed,nonce:0};return json({retired,commitment:lock});}
-      if(p==='/api/rounds'){qaFixture.roundsReads++;return json(mode==='lost'&&qaFixture.posts>=1?[row]:[]);}
+      if(p.endsWith('/fairness/rotate')){const b=JSON.parse(opt.body);qaFixture.rotates.push(b);saveState();if(b.expectedCommitment.serverSeedHash!==lock.serverSeedHash)return json({error:'stale or mismatched expectedCommitment'},409);const retired={serverSeed:seed,serverSeedHash:lock.serverSeedHash};lock={serverSeedHash:nextLock,clientSeed:lock.clientSeed,nonce:0};saveState();return json({retired,commitment:lock});}
+      if(p==='/api/rounds'){qaFixture.roundsReads++;return json((mode==='lost'||mode==='reload-played')&&qaFixture.posts>=1?[row]:[]);}
       if(p.endsWith('/games/godsofpower/config'))return json({gameId:'godsofpower',enabled:true,minStakeCents:2000,maxStakeCents:1000000,maxWinCents:200000000});
       if(p.endsWith('/casino/reserve'))return json({live:false});
       if(p.endsWith('/api/events'))return json({ok:true});
@@ -60,12 +67,14 @@ function fixtureScript({ entropy, reply }, mode = 'ok') {
         if(mode==='refuse503')return json({error:'Real play is paused while the casino wallet is checked. Please try again shortly.'},503);
         if(mode==='other_tab')return json({error:'You are playing in another tab or game. Finish that round first.',code:'other_tab'},409);
         if(mode==='lost'&&qaFixture.posts===1){await new Promise(r=>setTimeout(r,40000));return json({error:'never'},500);}
-        lock={serverSeedHash:nextLock,clientSeed:lock.clientSeed,nonce:0};return json(reply);}
+        if(mode==='reload-stall'){saveState();await new Promise(r=>setTimeout(r,60000));return json({error:'never'},500);}
+        if(mode==='reload-played'&&qaFixture.posts===1){lock={serverSeedHash:nextLock,clientSeed:lock.clientSeed,nonce:0};saveState();await new Promise(r=>setTimeout(r,60000));return json({error:'never'},500);}
+        lock={serverSeedHash:nextLock,clientSeed:lock.clientSeed,nonce:0};saveState();return json(reply);}
       return json({error:'unknown fixture route'},404);};
   })()`;
 }
 
-async function open(w, h, script) {
+async function open(w, h, script, url = `${APP_URL}/godsofpower`, readySel = '[data-testid="slot-spin"]') {
   const page = await (await fetch(`${CDP_URL}/json/new?about:blank`, { method: 'PUT' })).json();
   const ws = new WebSocket(page.webSocketDebuggerUrl); await new Promise((r) => (ws.onopen = r));
   let id = 0; const pending = new Map(), errors = [];
@@ -74,11 +83,13 @@ async function open(w, h, script) {
   const ev = async (expression) => { const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw Error(JSON.stringify(r.exceptionDetails)); return r.result.value; };
   await send('Runtime.enable'); await send('Page.enable');
   await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: w < 1100 });
-  await send('Page.addScriptToEvaluateOnNewDocument', { source: script });
-  await send('Page.navigate', { url: `${APP_URL}/godsofpower` });
-  for (let i = 0; i < 150; i++) { await sleep(100); if (await ev(`(()=>{const s=document.querySelector('[data-testid="slot-spin"]');return !!s&&!s.disabled})()`).catch(() => false)) break; }
+  if (script) await send('Page.addScriptToEvaluateOnNewDocument', { source: script });
+  const waitReady = async () => { for (let i = 0; i < 150; i++) { await sleep(100); if (await ev(`(()=>{const s=document.querySelector(${JSON.stringify(readySel)});return !!s&&!s.disabled})()`).catch(() => false)) return true; } return false; };
+  await send('Page.navigate', { url });
+  await waitReady();
   const screenshot = async (name) => { const r = await send('Page.captureScreenshot', { format: 'png' }); const f = path.join(OUT, `${name}.png`); fs.writeFileSync(f, Buffer.from(r.data, 'base64')); return f; };
-  return { send, ev, screenshot, errors, close: async () => { await send('Page.close').catch(() => {}); ws.close(); } };
+  const reload = async () => { await send('Page.reload'); await sleep(500); return waitReady(); };
+  return { send, ev, screenshot, errors, reload, close: async () => { await send('Page.close').catch(() => {}); ws.close(); } };
 }
 
 (async () => {
@@ -196,6 +207,87 @@ async function open(w, h, script) {
     assert.deepEqual(x.errors.filter((e) => !/ResizeObserver/.test(e)), [], 'lost: page errors');
     console.log('PASS', JSON.stringify({ label: 'lost_reply_recovered', api: 'controlled fixture (not live data)', posts: bodies.length }));
     await x.close();
+  }
+  { // 4. reload mid-spin, server never played it: on the next load the saved lock is retired through rotate, never reused
+    const fx = await makeRound('small');
+    const x = await open(1280, 800, fixtureScript(fx, 'reload-stall'));
+    await x.ev(`document.querySelector('[data-testid="slot-spin"]').click()`);
+    for (let i = 0; i < 50 && (await x.ev('qaFixture.posts')) < 1; i++) await sleep(100);
+    assert.equal(await x.ev('qaFixture.posts'), 1, 'reload-stall: the spin was posted');
+    assert.ok(await x.ev('qaFixture.openLockBeforePost'), 'reload-stall: the open lock was saved before the post');
+    const saved = await x.ev(`JSON.parse(localStorage.getItem('betics:open-locks:v1')||'[]')`);
+    assert.equal(saved.length, 1); assert.equal(saved[0].game, 'godsofpower', 'the entry is tagged with the game'); assert.equal(typeof saved[0].tab, 'string', 'and the tab that sent it');
+    await sleep(800);
+    assert.ok(await x.reload(), 'reload-stall: the page is ready again after the reload');
+    assert.ok(!(await x.ev('qaFixture.firstLoad')), 'the fixture kept its state across the reload');
+    const rotates = await x.ev('qaFixture.rotates');
+    assert.equal(rotates.length, 1, 'reload-stall: the saved lock was retired through POST /api/fairness/rotate on load');
+    assert.equal(rotates[0].expectedCommitment.serverSeedHash, fx.reply.fairness.serverSeedHash, 'reload-stall: rotate carries the saved lock');
+    assert.equal((await lockShown(x)).slice(0, 8), fx.reply.fairness.nextCommitment.serverSeedHash.slice(0, 8), 'reload-stall: the next lock is shown, the saved one is never reused');
+    assert.equal(await openLocks(x), 0, 'reload-stall: the open lock list is clear');
+    assert.equal(await budget(x, 'unpredicted'), 1, 'reload-stall: counted once in the strict budget');
+    const log = await x.ev(`JSON.parse(localStorage.getItem('betics:refused-log:v1')||'[]')`);
+    assert.equal(log.length, 1); assert.equal(log[0].kind, 'lost'); assert.deepEqual(log[0].stops, fx.reply.spins[0].stops, 'reload-stall: the would-have stops are logged from the revealed key');
+    assert.ok(await x.ev(`JSON.parse(localStorage.getItem('noir:revealed:v1')||'[]').includes(${JSON.stringify(fx.reply.fairness.serverSeedHash)})`), 'reload-stall: the retired lock is remembered as revealed');
+    const t = await toast(x);
+    assert.match(t, /your bet was not taken/i, `reload-stall: the player is told (${t})`);
+    assert.ok(!/[Rr]eload the page/.test(t), `reload-stall: no reload message (${t})`);
+    assert.ok(!(await x.ev(`document.querySelector('[data-testid="slot-spin"]').disabled`)), 'reload-stall: play goes on with the new lock');
+    shots.push(await x.screenshot('fixture-reload-stall'));
+    assert.deepEqual(x.errors.filter((e) => !/ResizeObserver/.test(e)), [], 'reload-stall: page errors');
+    console.log('PASS', JSON.stringify({ label: 'reload_stall_retired', api: 'controlled fixture (not live data)', rotates: rotates.length, toast: t.slice(0, 120) }));
+    await x.close();
+  }
+  { // 5. reload mid-spin, server played it: on the next load the round found in /api/rounds is verified with the slot checker and cleared
+    const fx = await makeRound('small');
+    const x = await open(1280, 800, fixtureScript(fx, 'reload-played'));
+    await x.ev(`document.querySelector('[data-testid="slot-spin"]').click()`);
+    for (let i = 0; i < 50 && (await x.ev('qaFixture.posts')) < 1; i++) await sleep(100);
+    assert.equal(await x.ev('qaFixture.posts'), 1);
+    await sleep(800);
+    assert.ok(await x.reload(), 'reload-played: ready again after the reload');
+    for (let i = 0; i < 50 && (await openLocks(x)) > 0; i++) await sleep(100);
+    assert.equal((await x.ev('qaFixture.rotates')).length, 0, 'reload-played: NOT retired, the round used it');
+    assert.ok(await x.ev('qaFixture.roundsReads') >= 1, 'reload-played: /api/rounds was checked');
+    assert.equal(await openLocks(x), 0, 'reload-played: the verified round closes the open lock');
+    assert.equal(await budget(x, 'unpredicted'), 0, 'reload-played: nothing counted');
+    assert.equal((await x.ev(`JSON.parse(localStorage.getItem('betics:refused-log:v1')||'[]')`)).length, 0, 'reload-played: nothing logged');
+    assert.equal((await lockShown(x)).slice(0, 8), fx.reply.fairness.nextCommitment.serverSeedHash.slice(0, 8), 'reload-played: the server\'s next lock is shown');
+    assert.ok(await x.ev(`JSON.parse(localStorage.getItem('noir:revealed:v1')||'[]').includes(${JSON.stringify(fx.reply.fairness.serverSeedHash)})`), 'reload-played: the used lock is remembered as revealed');
+    const t = await toast(x);
+    assert.match(t, /Your earlier spin went through and paid/, `reload-played: the verified round is reported (${t})`);
+    assert.ok(!(await x.ev(`document.querySelector('[data-testid="slot-spin"]').disabled`)), 'reload-played: play goes on');
+    shots.push(await x.screenshot('fixture-reload-played'));
+    assert.deepEqual(x.errors.filter((e) => !/ResizeObserver/.test(e)), [], 'reload-played: page errors');
+    console.log('PASS', JSON.stringify({ label: 'reload_played_verified', api: 'controlled fixture (not live data)', toast: t.slice(0, 120) }));
+    await x.close();
+  }
+  { // 6. a godsofpower open-lock entry in storage never blocks the roulette page (real local Worker, no fixture)
+    const seedScript = `(()=>{ if(sessionStorage.getItem('qa-seeded'))return; sessionStorage.setItem('qa-seeded','1'); localStorage.clear(); localStorage.setItem('betics:adult:v1','1');
+      localStorage.setItem('betics:open-locks:v1', JSON.stringify([{ identity:'guest', game:'godsofpower', serverSeedHash:'${'a'.repeat(64)}', clientSeed:'lucky', nonce:0, clientEntropy:'${'e'.repeat(64)}', requestId:'00000000-0000-4000-8000-000000000002', at: Date.now()-120000, refused:false, counted:false }])); })()`;
+    const x = await open(1280, 800, seedScript, `${APP_URL}/roulette`, '.brand-spin');
+    await sleep(3000); // the roulette page loads its lock, then checks its open locks against /api/rounds
+    const state = await x.ev(`({ spin: document.querySelector('.brand-spin')?.textContent || '', errors: [...document.querySelectorAll('.game-toast-error, .game-error')].map(e=>e.textContent).join(' | '), body: document.body.innerText })`);
+    assert.ok(!/BLOCKED/.test(state.spin), `slot entry on roulette: spin is not blocked (${state.spin})`);
+    assert.ok(!/does not check out|Betting is stopped|never opened/i.test(state.errors + state.body), `slot entry on roulette: no verification stop or never-opened notice (${state.errors})`);
+    const left = await x.ev(`JSON.parse(localStorage.getItem('betics:open-locks:v1')||'[]')`);
+    assert.equal(left.length, 1, 'slot entry on roulette: the slot entry is left for the slot page to check'); assert.equal(left[0].game, 'godsofpower');
+    assert.equal(await budget(x, 'unpredicted'), 0, 'slot entry on roulette: nothing counted by roulette');
+    assert.equal((await x.ev(`JSON.parse(localStorage.getItem('betics:refused-log:v1')||'[]')`)).length, 0, 'slot entry on roulette: nothing logged by roulette');
+    shots.push(await x.screenshot('fixture-slot-entry-roulette'));
+    assert.deepEqual(x.errors.filter((e) => !/ResizeObserver|AppKit|reown|walletconnect/i.test(e)), [], 'slot entry on roulette: page errors');
+    console.log('PASS', JSON.stringify({ label: 'slot_entry_does_not_block_roulette', api: 'real local Worker', spin: state.spin }));
+    // ...and the mirror: the slot page leaves a roulette entry alone (it is roulette's to check).
+    const mirror = `(()=>{ if(sessionStorage.getItem('qa-seeded'))return; sessionStorage.setItem('qa-seeded','1'); localStorage.clear(); localStorage.setItem('betics:adult:v1','1');
+      localStorage.setItem('betics:open-locks:v1', JSON.stringify([{ identity:'guest', game:'roulette', serverSeedHash:'${'b'.repeat(64)}', clientSeed:'lucky', nonce:0, clientEntropy:'${'e'.repeat(64)}', requestId:'00000000-0000-4000-8000-000000000003', at: Date.now()-120000, refused:false, counted:false }])); })()`;
+    const y = await open(1280, 800, mirror);
+    await sleep(3000);
+    assert.ok(!(await y.ev(`document.querySelector('[data-testid="slot-spin"]').disabled`)), 'roulette entry on the slot: spin enabled');
+    assert.equal((await y.ev(`JSON.parse(localStorage.getItem('betics:open-locks:v1')||'[]')`)).length, 1, 'roulette entry on the slot: left alone');
+    assert.equal(await budget(y, 'unpredicted'), 0);
+    assert.ok(!/never opened|does not check out/i.test(await toast(y)));
+    console.log('PASS', JSON.stringify({ label: 'roulette_entry_does_not_block_slot', api: 'real local Worker' }));
+    await x.close(); await y.close();
   }
   console.log('SLOTS FIXTURE QA PASSED (controlled fixture rounds, real engine, real browser verification). Screenshots:', shots.length, 'in', OUT);
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -13,7 +13,7 @@ import { SLOT_MATH, BET_LEVELS } from '../../backend/src/games/slotsMath.js';
 import { makeUint32At } from '../../backend/src/core/slotDraws.js';
 import { rememberOpenLock, readOpenLocks, findOpenLock, locksToCheck, findRoundForLock, ownRoundProblems, roundGame, canAcceptReloadedLock, mustRetireLock,
   otherTabSeenRecently, noteSpinPosted, readLastSpin, ownSpinSwitchedGame, classifySpinRefusal, budgetFor, OPEN_LOCK_GRACE_MS, OTHER_TAB_SEEN_WINDOW_MS, OTHER_TAB_GRACE_MS,
-  GAMES, DEFAULT_GAME, LOCK_RECHECK_MESSAGE, LOST_REPLY_RECHECK_MESSAGE, STALE_LOCK_RECHECK_MESSAGE, LOCK_CHANGED_MESSAGE, LOCK_CHECK_GAVE_UP_MESSAGE } from '../src/spinRefusal.js';
+  GAMES, DEFAULT_GAME, retireWaitMs, LOCK_IN_FLIGHT_MESSAGE, LOCK_RECHECK_MESSAGE, LOST_REPLY_RECHECK_MESSAGE, STALE_LOCK_RECHECK_MESSAGE, LOCK_CHANGED_MESSAGE, LOCK_CHECK_GAVE_UP_MESSAGE } from '../src/spinRefusal.js';
 import { beat, notePlay, otherTabRecently, otherTabPlayedRecently, tabIdFor } from '../src/tabPresence.js';
 import { verifyRevealedRound } from '../src/fairnessClient.js';
 import { createSlotRequest, betLevelStates, HOUSE_LOSS_LIMIT_MESSAGE } from '../src/slots/slotsApi.js';
@@ -93,7 +93,7 @@ test('mirror: a roulette open lock never reaches the slot page check; the slot v
   assert.deepEqual(locksToCheck('guest', H('c'), later, s, { game: 'godsofpower' }), []);
   const slot = src('slots/SlotsApp.jsx');
   const check = slice(slot, 'const checkOpenLocks = async', 'checkOpenLocksRef.current = checkOpenLocks;');
-  assert.match(check, /locksToCheck\(identity\(\), currentHash, Date\.now\(\), undefined, \{ game: 'godsofpower' \}\)/);
+  assert.match(check, /locksToCheck\(identity\(\), currentHash, Date\.now\(\), undefined, \{ game: 'godsofpower', tab: session\.tabId \|\| null \}\)/);
   const settle = slice(slot, 'const settleOpenLock = async', 'const checkOpenLocks = async');
   assert.match(settle, /const round = slotRoundFromRow\(hit\.round\);/);
   assert.match(settle, /await checkSlotHistoryRound\(round\)/, 'own slot rounds go through the slot history check (receipt without the balance)');
@@ -117,7 +117,9 @@ test('SlotsApp loads the lock like roulette reloadCommitment: a saved lock that 
   assert.match(load, /if \(!canAcceptReloadedLock\(c, previousHash\)\)/, 'canAcceptReloadedLock semantics');
   assert.match(load, /const prev = findOpenLock\(previousHash, identity\(\)\);\s*const result = prev \? await settleOpenLock\(prev\) : 'missing';/, 'a different lock is only taken when the old key was shown in a settled round');
   assert.match(load, /if \(result !== 'settled' && result !== 'other'\) throw new Error\(LOCK_CHANGED_MESSAGE\);/);
-  assert.match(load, /const open = findOpenLock\(c\.serverSeedHash, identity\(\)\);\s*if \(open && mustRetireLock\(open\)\)/);
+  assert.match(load, /const open = findOpenLock\(c\.serverSeedHash, identity\(\)\);\s*if \(open && !mustRetireLock\(open, Date\.now\(\), session\.tabId \|\| null\)\) \{/, 'a fresh entry of ANOTHER tab is never accepted as it is: a timed wait instead');
+  assert.match(load, /wait\.retryInMs = retireWaitMs\(open, Date\.now\(\), session\.tabId \|\| null\); throw wait;/);
+  assert.match(load, /if \(open\) \{\s*const swap = await openAndLog\(open, 'lost'/, 'every other saved entry for the current lock is retired through the reveal first');
   assert.match(load, /await openAndLog\(open, 'lost', open\.refused \? 'Refused before this page was reloaded' : 'The page closed before the reply',\s*readSlotReceipt\(open\.requestId\)\?\.stake \?\? null, \{ serverSeedHash: c\.serverSeedHash, clientSeed: c\.clientSeed, nonce: c\.nonce \}\)/, 'retired through the reveal with the server\'s current form of the lock');
   assert.ok(load.indexOf('await openAndLog(open') < load.indexOf('setCommitment(swap.commitment)'), 'the reveal happens before the lock is accepted');
   assert.match(load, /if \(!swap\.ok\) throw new Error\(LOCK_RECHECK_MESSAGE\);/, 'a failed reveal never lets the saved lock through');
@@ -160,6 +162,24 @@ test('the slot page has no "reload the page" dead end left outside a fairness st
   assert.equal(canAcceptReloadedLock({ serverSeedHash: H('b') }, H('a')), false);
   assert.equal(canAcceptReloadedLock({ serverSeedHash: H('b') }, null), true);
   assert.equal(mustRetireLock({ refused: true, at: Date.now() }), true);
+  // The tab that sent the random value retires its own fresh entry at once after a reload (nothing else waits for it);
+  // another tab's fresh entry waits out the grace.
+  const t0 = 1_000_000, mine = { ...lockEntry({ tab: 'tab-1' }), at: t0, refused: false, counted: false };
+  assert.equal(mustRetireLock(mine, t0 + 1000), false, 'no tab known: within the grace');
+  assert.equal(mustRetireLock(mine, t0 + 1000, 'tab-1'), true, 'own tab: at once');
+  assert.equal(mustRetireLock(mine, t0 + 1000, 'tab-2'), false, 'another tab: wait');
+  assert.equal(retireWaitMs(mine, t0 + 1000, 'tab-1'), 0);
+  assert.equal(retireWaitMs(mine, t0 + 1000, 'tab-2'), OPEN_LOCK_GRACE_MS - 1000 + 500);
+  assert.equal(retireWaitMs(mine, t0 + OPEN_LOCK_GRACE_MS + 1, 'tab-2'), 0);
+  const s = mem(); rememberOpenLock({ ...lockEntry({ tab: 'tab-1', game: 'godsofpower' }), at: t0 }, s);
+  assert.equal(locksToCheck('guest', H('z'), t0 + 1000, s, { game: 'godsofpower' }).length, 0, 'fresh: left alone');
+  assert.equal(locksToCheck('guest', H('z'), t0 + 1000, s, { game: 'godsofpower', tab: 'tab-1' }).length, 1, 'own tab: checked now');
+  assert.equal(locksToCheck('guest', H('z'), t0 + 1000, s, { game: 'godsofpower', tab: 'tab-2' }).length, 0);
+  assert.throws(() => rememberOpenLock(lockEntry({ tab: 'x'.repeat(65) }), mem()));
+  assert.match(src('slots/SlotsApp.jsx'), /game: 'godsofpower', \.\.\.\(session\.tabId \? \{ tab: session\.tabId \} : \{\}\) \}\);/, 'the slot saves its tab id with the entry');
+  const recover = slice(src('slots/SlotsApp.jsx'), 'const RECOVER_DELAYS_MS', 'recoverRef.current = recoverLock;');
+  assert.match(recover, /if \(Number\.isFinite\(e\.retryInMs\)\)/, 'the timed wait is not one of the retries');
+  assert.ok(!/reload/i.test(LOCK_IN_FLIGHT_MESSAGE));
 });
 
 // ---- 3. other tab: play signals only, same-tab game switch predicted ----
