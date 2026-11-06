@@ -220,9 +220,9 @@ test('main.jsx routes / to the Lobby and /roulette to the roulette App', () => {
 test('in-app links: the logo and Lobby pills go to /, the games are reached at /roulette and /godsofpower', () => {
   const read = (f) => fs.readFileSync(path.join(here, '..', 'src', f), 'utf8');
   assert.match(read('LobbyLink.jsx'), /href="\/" data-testid="lobby-link"/);
-  assert.match(read('slots/SlotsApp.jsx'), /<LobbyLink className="slot-link" \/>/);
-  assert.match(read('App.jsx'), /<SoundQuickControls onOpen=\{\(\) => setSoundSettingsOpen\(true\)\}>\{!portraitPhone && <LobbyLink \/>\}/, 'roulette: Lobby pill in the sound toolbar row');
-  assert.match(read('App.jsx'), /\{portraitPhone && <LobbyLink className="lobby-link-row" \/>\}/, 'portrait phones: own short row, so the logo is not squeezed');
+  // Both games render the Lobby pill through the shared header (GameHeader.jsx, headerModel.js).
+  assert.match(read('GameHeader.jsx'), /lobby: <LobbyLink key="lobby" className="gh-pill gh-lobby" \/>/);
+  assert.match(read('slots/SlotsApp.jsx'), /<GameHeader page="slot"/); assert.match(read('App.jsx'), /<GameHeader page="roulette"/);
   assert.ok(!/slot-roulette-link/.test(read('slots/SlotsApp.jsx')), 'the old Roulette link is gone');
   for (const f of ['Terms.jsx', 'HowItWorks.jsx']) assert.match(read(f), /href="\/">Back to the lobby</, `${f} back link goes home`);
   const lobby = read('Lobby.jsx');

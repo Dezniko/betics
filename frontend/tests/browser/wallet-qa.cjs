@@ -77,8 +77,8 @@ const ready = (x) => x.waitFor(`/Next lock[^a-f0-9]*[a-f0-9]{8}/.test(document.b
 const api = (x, p, body) => x.ev(`fetch(${JSON.stringify(p)},${body ? `{method:'POST',headers:{'content-type':'application/json'},body:${JSON.stringify(JSON.stringify(body))}}` : '{}'}).then(async r=>({status:r.status,body:await r.json()}))`);
 // Every header control on screen, inside the viewport, and none overlapping another.
 const layoutCheck = (x) => x.ev(`(()=>{const q=s=>[...document.querySelectorAll(s)].filter(e=>e.checkVisibility()).map(e=>{const r=e.getBoundingClientRect();return{s,l:r.left,t:r.top,r:r.right,b:r.bottom}});
- const items=[...q('header h1'),...q('header .mobile-history-trigger'),...q('header button[aria-label="How is this verified as fair?"]'),...q('header .commitment-button'),...q('.sound-toolbar'),...q('[data-testid=mode-switch]'),...q('[data-testid=header-balance]'),...q('.demo-refill'),...q('[data-testid=wallet-chip],[data-testid=wallet-connect]')];
- const over=[];for(let i=0;i<items.length;i++)for(let j=i+1;j<items.length;j++){const a=items[i],b=items[j];if(a.s==='.sound-toolbar'&&b.s==='.sound-toolbar')continue;if(a.l<b.r-0.5&&b.l<a.r-0.5&&a.t<b.b-0.5&&b.t<a.b-0.5)over.push(a.s+' x '+b.s)}
+ const items=[...q('header h1'),...q('header [data-testid=lobby-link]'),...q('header .commitment-button'),...q('[data-testid=header-mute]'),...q('[data-testid=mode-switch]'),...q('[data-testid=header-balance]'),...q('[data-testid=wallet-chip],[data-testid=header-profile].guest')];
+ const over=[];for(let i=0;i<items.length;i++)for(let j=i+1;j<items.length;j++){const a=items[i],b=items[j];if(a.l<b.r-0.5&&b.l<a.r-0.5&&a.t<b.b-0.5&&b.t<a.b-0.5)over.push(a.s+' x '+b.s)}
  const outside=items.filter(a=>a.l<-0.5||a.t<-0.5||a.r>innerWidth+0.5||a.b>innerHeight+0.5).map(a=>a.s);
  return{over,outside,docW:document.documentElement.scrollWidth,docH:document.documentElement.scrollHeight,w:innerWidth,h:innerHeight}})()`);
 const pass = (msg) => console.log('PASS', msg);
@@ -107,16 +107,14 @@ const pass = (msg) => console.log('PASS', msg);
   // 2. Guest: Demo, 100,000 demo $TICS, Real unavailable with a reason, $TICS everywhere.
   await x.waitFor(`document.querySelector('[data-testid=header-balance]').textContent.includes('$TICS')`);
   assert.equal(await x.text('[data-testid=header-balance]'), '100,000.00 $TICS');
-  assert.equal(await x.ev(`document.querySelector('[data-testid=mode-switch]').dataset.mode`), 'demo');
-  assert.equal(await x.ev(`document.querySelector('[data-testid=mode-real]').getAttribute('aria-disabled')`), 'true');
-  await x.click('[data-testid=mode-real]');
-  await x.waitFor(`document.body.innerText.includes('Connect a wallet to play with real $TICS.')`, 3000, 'real reason');
-  assert.equal(await x.ev(`document.querySelector('[data-testid=mode-switch]').dataset.mode`), 'demo');
+  // A guest plays Demo and has no Real/Demo switch (it shows once a wallet is connected, in the shared header).
+  assert.equal(await x.ev(`!!document.querySelector('[data-testid=mode-switch]')`), false, 'no switch for a guest');
+  assert.equal(await x.ev(`document.querySelector('[data-testid=header-balance]').dataset.mode`), 'demo');
   assert.equal(await x.ev(`/\\$\\d/.test(document.body.innerText)`), false, 'no dollar amounts');
   assert.ok(await x.ev(`!!document.querySelector('button[title="100 $TICS chip (key 5)"]')`), 'chips are $TICS');
   assert.equal(await x.ev(`document.querySelector('[data-testid=wallet-connect]').innerText.trim()`), 'Connect wallet');
   shots.push(await x.shot('header-guest-desktop'));
-  pass('guest shows Demo with 100,000.00 $TICS, Real unavailable with a plain reason, $TICS chips, Connect wallet');
+  pass('guest shows Demo with 100,000.00 $TICS, no Real/Demo switch, $TICS chips, Connect wallet');
 
   // 3. Connect + SIWE sign-in; the __Host- Secure wallet cookie sticks on http://127.0.0.1.
   // The first Connect in this browser shows the custody / fairness / beta notice; Continue needs the tick.
@@ -186,8 +184,8 @@ const pass = (msg) => console.log('PASS', msg);
   shots.push(await x.shot('panel-withdraw-waiting'));
   await x.type('[data-testid=withdraw-amount]', '');
   await x.click('[data-testid=tab-topup]'); await sleep(300);
-  await x.click('.wallet-panel .fair-head button'); await sleep(400);
-  await x.waitFor(`document.querySelector('[data-testid=mode-switch]').dataset.mode==='real'&&!document.querySelector('[data-testid=mode-demo]')&&!document.querySelector('.demo-refill')`, 5000, 'real forced');
+  await x.click('[data-testid=profile-close]'); await sleep(400);
+  await x.waitFor(`document.querySelector('[data-testid=mode-switch]').dataset.mode==='real'&&!document.querySelector('[data-testid=mode-demo]')`, 5000, 'real forced');
   assert.equal(await x.text('[data-testid=header-balance]'), '5,000.00 $TICS');
   shots.push(await x.shot('header-funded-desktop'));
   pass('top up sent as ERC-20 transfer of 5000e18 to the casino wallet, Confirming 1 of 2, Credited, Demo hidden, Real forced');
@@ -252,7 +250,7 @@ const pass = (msg) => console.log('PASS', msg);
   // 8. Disconnect returns to the guest Demo session.
   await x.click('[data-testid=wallet-disconnect]');
   await x.waitFor(`!!document.querySelector('[data-testid=wallet-connect]')&&!document.querySelector('[data-testid=wallet-panel]')`, 10000, 'disconnected');
-  await x.waitFor(`document.querySelector('[data-testid=mode-switch]').dataset.mode==='demo'&&!!document.querySelector('[data-testid=mode-demo]')`, 8000, 'demo after disconnect');
+  await x.waitFor(`document.querySelector('[data-testid=header-balance]').dataset.mode==='demo'&&!document.querySelector('[data-testid=mode-switch]')`, 8000, 'demo after disconnect');
   assert.equal(await x.text('[data-testid=header-balance]'), '100,000.00 $TICS');
   assert.equal((await api(x, '/api/wallet/me')).status, 401);
   await ready(x);

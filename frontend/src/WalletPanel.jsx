@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { motion } from 'framer-motion';
 import { fmtMoney } from './chips.js';
-import Avatar from './Avatar.jsx';
 import CasinoReserve from './CasinoReserve.jsx';
 import SupportLink, { SUPPORT_URL } from './Support.jsx';
 import { walletApi, shortAddress, explorerTx, parseTicsInput, nextWithdrawRequest, withdrawReviewFee, DEPOSIT_TEXT, WITHDRAW_NOTE, withdrawText, heldRowText, TOPUP_WAIT_NOTE, creditedText, withdrawWaitText } from './walletApi.js';
@@ -196,32 +194,33 @@ function Activity({ profile }) {
 }
 
 const TABS = [['topup', 'Top up'], ['withdraw', 'Withdraw'], ['activity', 'Activity']];
-const since = (s) => {
+export const memberSince = (s) => {
   if (!s) return null;
   const d = new Date(String(s).replace(' ', 'T') + (String(s).includes('Z') ? '' : 'Z'));
   return Number.isNaN(d.getTime()) ? null : d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
 };
 
-// Desktop: a drop-down hanging from the header profile button, with a folder tab in the
-// button's place. Phones: the same card as a bottom sheet.
-function useAnchor(enabled) {
+// Desktop: the profile sheet hangs from the header profile pill with a folder tab in the pill's place.
+// This reads the pill's rect so the sheet can be positioned (the sheet itself lives in ProfileSheet.jsx).
+export function useAnchor(enabled, selector = '[data-testid=header-profile]') {
   const [rect, setRect] = useState(null);
   useEffect(() => {
     if (!enabled) return undefined;
     const read = () => {
-      const el = document.querySelector('[data-testid=wallet-chip]');
+      const el = document.querySelector(selector);
       const r = el?.getBoundingClientRect();
       setRect(r && r.width ? { top: r.top, bottom: r.bottom, right: r.right, left: r.left, width: r.width, height: r.height } : null);
     };
     read();
     window.addEventListener('resize', read);
     return () => window.removeEventListener('resize', read);
-  }, [enabled]);
+  }, [enabled, selector]);
   return rect;
 }
 
-export default function WalletPanel({ profile, wallet, mobile, deposit, onTopUp, onRefresh, onDisconnect, onClose, disconnectDisabled }) {
-  const [disconnecting, setDisconnecting] = useState(false);
+// The Wallet tab of the profile sheet for a connected wallet: statement rows, Top up / Withdraw /
+// Activity and the email box (Disconnect is a row of the sheet). Tests click `tab-*` before touching tab content.
+export function WalletContent({ profile, wallet, deposit, onTopUp, onRefresh }) {
   const pending = profile.withdrawals.some((w) => ['queued', 'signing', 'sending'].includes(w.status));
   const refreshRef = useRef(onRefresh); refreshRef.current = onRefresh;
   // Also while a top up is not final yet, so the Withdraw tab opens as soon as it is confirmed.
@@ -234,58 +233,24 @@ export default function WalletPanel({ profile, wallet, mobile, deposit, onTopUp,
   const [tab, setTab] = useState(deposit && !deposit.final ? 'topup' : pending ? 'activity' : 'topup');
   // Opening the Withdraw tab reads the profile again, so it never shows an old 'still being confirmed'.
   useEffect(() => { if (tab === 'withdraw') refreshRef.current(); }, [tab]);
-  const member = since(profile.firstConnectedAt);
   const activityCount = profile.deposits.length + profile.withdrawals.length;
   const held = heldRowText(profile.withdrawals);
-  const anchor = useAnchor(!mobile);
-  const dropdown = !mobile && !!anchor;
-  const tabW = dropdown ? Math.max(150, Math.round(anchor.width + 16)) : 0;
-  const panelW = dropdown ? Math.min(440, window.innerWidth - 24) : 0;
-  const right = dropdown ? Math.max(12, Math.round(window.innerWidth - anchor.right - 8)) : 0;
-  const top = dropdown ? Math.max(8, Math.round(anchor.top - 6)) : 0;
-  const tabH = dropdown ? Math.round(anchor.height + 12) : 0;
-  const style = dropdown ? { position: 'fixed', top, right, width: panelW, '--tab-w': `${tabW}px`, '--tab-h': `${tabH}px`, maxHeight: `calc(100dvh - ${top + 16}px)` } : undefined;
-  const motionProps = mobile
-    ? { initial: { y: '100%' }, animate: { y: 0 }, exit: { y: '100%' } }
-    : { initial: { opacity: 0, y: -8, scale: 0.98 }, animate: { opacity: 1, y: 0, scale: 1 }, exit: { opacity: 0, y: -6 } };
-  return <motion.div className={`fair-backdrop ${dropdown ? 'profile-backdrop' : ''}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
-    <motion.div className={`${mobile ? 'fair-sheet' : 'fair-modal'} wallet-panel profile-panel ${dropdown ? 'profile-dropdown' : ''}`} style={style} role="dialog" aria-modal="true" aria-label="My profile" data-testid="wallet-panel"
-      {...motionProps} transition={{ type: 'spring', stiffness: 460, damping: 38 }} onClick={(e) => e.stopPropagation()}>
-      {mobile && <div className="fair-grabber" aria-hidden="true" />}
-      <div className="profile-folder-tab"><span>My profile</span><button type="button" className="profile-close" onClick={onClose} aria-label="Close">✕</button></div>
-      <div className="profile-body">
-        <div className="profile-card">
-          <p className="profile-eyebrow">My balance</p>
-          <div className="profile-card-balance">
-            <strong data-testid="panel-real-balance">{fmtMoney(wallet?.realTicsCents || 0)}</strong>
-            <Avatar address={profile.address} size={mobile ? 44 : 52} className="profile-avatar" />
-          </div>
-          <code className="wallet-mono profile-card-address" data-testid="wallet-address">{profile.address}</code>
-          <p className="profile-meta"><span className="profile-online"><span className="wallet-dot" aria-hidden="true" />Connected</span><span>Ethereum</span>{member && <span>Member since {member}</span>}</p>
-        </div>
-        <dl className="profile-rows">
-          <div><dt>Balance<small>Ready to play or withdraw</small></dt><dd>{fmtMoney(wallet?.realTicsCents || 0)}</dd></div>
-          {wallet?.heldCents > 0 && <div data-testid="panel-held"><dt>{held.title}<small>{held.note}</small></dt><dd>{fmtMoney(wallet.heldCents)}</dd></div>}
-          {wallet?.demoAllowed !== false && <div><dt>Practice<small>Free play, no value</small></dt><dd data-testid="panel-demo-balance">{fmtMoney(wallet?.balanceCents || 0)}</dd></div>}
-        </dl>
-        <div className="profile-tabs" role="tablist" aria-label="Profile sections">
-          {TABS.map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={tab === key} className={tab === key ? 'on' : ''} data-testid={`tab-${key}`} onClick={() => setTab(key)}>
-            {label}{key === 'activity' && activityCount > 0 && <span className="profile-tab-count">{Math.min(activityCount, 99)}</span>}
-          </button>)}
-        </div>
-        <div className="profile-tab-body" role="tabpanel">
-          {tab === 'topup' && <TopUp profile={profile} deposit={deposit} onTopUp={onTopUp} />}
-          {tab === 'withdraw' && <><CasinoReserve variant="compact" /><Withdraw profile={profile} wallet={wallet} onDone={onRefresh} /></>}
-          {tab === 'activity' && <Activity profile={profile} />}
-        </div>
-        <EmailBox profile={profile} onSaved={onRefresh} />
-        <div className="profile-logout-row">
-          <button type="button" className="profile-logout" data-testid="wallet-disconnect" disabled={disconnecting || disconnectDisabled}
-            onClick={async () => { setDisconnecting(true); try { await onDisconnect(); } finally { setDisconnecting(false); } }}>{disconnecting ? 'Disconnecting...' : 'Disconnect'}</button>
-        </div>
-        <SupportLink testid="profile-support" />
-        <p className="fair-foot"><a href="/how-it-works" target="_blank" rel="noopener">How it works</a> · <a href="/terms" target="_blank" rel="noopener">Terms</a>. Play at your own risk. Blockchain transfers cannot be reversed.</p>
-      </div>
-    </motion.div>
-  </motion.div>;
+  return <div className="wallet-content" data-testid="wallet-content">
+    <dl className="profile-rows">
+      <div><dt>Balance<small>Ready to play or withdraw</small></dt><dd data-testid="panel-real-balance">{fmtMoney(wallet?.realTicsCents || 0)}</dd></div>
+      {wallet?.heldCents > 0 && <div data-testid="panel-held"><dt>{held.title}<small>{held.note}</small></dt><dd>{fmtMoney(wallet.heldCents)}</dd></div>}
+      {wallet?.demoAllowed !== false && <div><dt>Practice<small>Free play, no value</small></dt><dd data-testid="panel-demo-balance">{fmtMoney(wallet?.balanceCents || 0)}</dd></div>}
+    </dl>
+    <div className="profile-tabs wallet-tabs" role="tablist" aria-label="Wallet sections">
+      {TABS.map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={tab === key} className={tab === key ? 'on' : ''} data-testid={`tab-${key}`} onClick={() => setTab(key)}>
+        {label}{key === 'activity' && activityCount > 0 && <span className="profile-tab-count">{Math.min(activityCount, 99)}</span>}
+      </button>)}
+    </div>
+    <div className="profile-tab-body" role="tabpanel">
+      {tab === 'topup' && <TopUp profile={profile} deposit={deposit} onTopUp={onTopUp} />}
+      {tab === 'withdraw' && <><CasinoReserve variant="compact" /><Withdraw profile={profile} wallet={wallet} onDone={onRefresh} /></>}
+      {tab === 'activity' && <Activity profile={profile} />}
+    </div>
+    <EmailBox profile={profile} onSaved={onRefresh} />
+  </div>;
 }

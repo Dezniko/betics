@@ -29,3 +29,30 @@ test('every mobile fitted hit zone remains physically valid and stays within the
     }
   }
 });
+
+// ---- the shared header on phones: no page-level header CSS fights the shared one ----
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const here = path.dirname(fileURLToPath(import.meta.url));
+const css = (f) => fs.readFileSync(path.join(here, '..', 'src', f), 'utf8');
+
+test('the old per-page header rules are gone, so the shared header lays itself out alone', () => {
+  const index = css('index.css');
+  for (const gone of ['.mobile-game header', '.phone-portrait header', '.phone-portrait .header-right', '.mobile-history-trigger', '.demo-refill', '.sound-toolbar', '.inbox-bell', '.lobby-link {', '.history-open', '.fairness-label', '.sound-dialog']) {
+    assert.ok(!index.includes(gone), `index.css still has ${gone}`);
+  }
+  assert.ok(!/\.lobby-header|\.lobby-brand|\.lobby-balance/.test(css('lobby.css')), 'lobby.css has no header rules');
+  assert.ok(!/\.slot-header|\.slot-brand|\.slot-balance|\.slot-lock|\.slot-link/.test(css('slots/slots.css')), 'slots.css has no header rules');
+  assert.match(index, /\.mobile-game \.history-panel \{ display: none; \}/, 'the desktop history panel stays hidden on phones (the sheet shows it)');
+});
+
+test('the shared header: two rows on portrait phones, one row otherwise, the logo never below its floor', () => {
+  const header = css('gameHeader.css');
+  assert.match(header, /\.gh-portrait \.brand-logo img \{ height: auto; width: auto; max-height: 26px; max-width: 100%; \}/, 'portrait: the logo scales down instead of sliding under its neighbours');
+  assert.match(header, /\.gh-landscape \.gh-logo, \.gh-desktop \.gh-logo \{ flex: 0 0 auto; \}/, 'one row layouts never squeeze the logo');
+  assert.match(header, /\.gh-portrait \.gh-profile\.connected \.wallet-chip-text \{ display: none; \}/, 'portrait: avatar only, the text stays in the DOM for the tests');
+  assert.match(header, /\.gh-portrait \.wc-long \{ display: none; \} \.gh-portrait \.wc-short \{ display: inline; \}/);
+  assert.match(header, /@media \(max-width: 374px\)/, 'narrow phones tighten the pills');
+  assert.ok(!/commitment-label \{ display: none/.test(header), 'Next lock stays readable text on every phone (the suites wait for it)');
+});

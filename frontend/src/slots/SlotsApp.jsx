@@ -2,18 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { SLOT_MATH, BET_LEVELS } from '../../../backend/src/games/slotsMath.js';
 import { gridFor } from '../../../backend/src/games/slots.js';
-import BrandLogo from '../BrandLogo.jsx';
-import LobbyLink from '../LobbyLink.jsx';
 import GameToast, { toastTitle } from '../GameToast.jsx';
-import { SoundQuickControls, SoundSettingsDialog } from '../SoundControls.jsx';
-import WalletPanel from '../WalletPanel.jsx';
-import Avatar from '../Avatar.jsx';
+import GameHeader from '../GameHeader.jsx';
+import ProfileSheet from '../ProfileSheet.jsx';
+import { useInbox } from '../Inbox.jsx';
 import ConnectNotice from '../ConnectNotice.jsx';
 import { AgeGate } from '../Terms.jsx';
 import WinCelebration from '../WinCelebration.jsx';
 import { useCasinoReserve } from '../CasinoReserve.jsx';
-import { shortAddress } from '../walletApi.js';
 import { fmtMoney, fmtTics } from '../chips.js';
+import { headerLayout } from '../headerModel.js';
 import { displayedBalanceCents } from '../balanceDisplay.js';
 import { isCommitmentValid, isNextCommitmentSafe, readRevealedHashes, rememberRevealedSeed } from '../fairnessClient.js';
 import { postJsonWithTimeout, classifySpinRefusal, OTHER_TAB_MESSAGE } from '../spinRefusal.js';
@@ -26,7 +24,8 @@ import { buildTimeline, TIMING, winningCells } from './slotAnim.js';
 import { PAGE_COPY as C } from './slotCopy.js';
 import Reels from './Reels.jsx';
 import SlotPaytable from './SlotPaytable.jsx';
-import SlotFairness from './SlotFairness.jsx';
+import SlotFairness, { SlotFairnessBody } from './SlotFairness.jsx';
+import SlotHistory from './SlotHistory.jsx';
 import useSession from '../useSession.js';
 import { usePlayGuard, PlayCover } from '../PlayGuard.jsx';
 import * as sfx from './slotSound.js';
@@ -51,14 +50,12 @@ const Plus = () => <svg viewBox="0 0 24 24" width="18" height="18" fill="none" s
 const SpinIcon = () => <svg className="slot-spin-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.6-5.9" /><path d="M20 4v5h-5" /></svg>;
 const COIN_BURST = Array.from({ length: 14 }, (_, i) => { const a = (-90 + (i - 6.5) * 13) * Math.PI / 180, r = 70 + (i % 3) * 30; return { dx: `${Math.round(Math.cos(a) * r)}px`, dy: `${Math.round(Math.sin(a) * r - 20)}px`, rot: `${(i % 2 ? 1 : -1) * (180 + i * 25)}deg`, t: `${0.8 + (i % 4) * 0.12}s`, delay: `${(i % 5) * 0.04}s` }; });
 const COIN_RAIN = Array.from({ length: 20 }, (_, i) => ({ x: `${(i * 23 + 7) % 100}%`, d: `${1.3 + (i % 4) * 0.25}s`, delay: `${-((i * 0.37) % 1.6)}s`, drift: `${(i % 2 ? 1 : -1) * (10 + (i % 3) * 12)}px`, rot: `${(i % 2 ? 1 : -1) * 540}deg` }));
-const LockGlyph = () => <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>;
 
 export default function SlotsApp() {
   const vp = useViewport();
-  const landscape = vp.w > vp.h && vp.h < 560;
-  const desktop = vp.w >= 1100 && !landscape;
+  const layout = headerLayout(vp.w, vp.h);
+  const desktop = layout === 'desktop';
   const mobile = !desktop;
-  const layout = landscape ? 'landscape' : desktop ? 'desktop' : 'portrait';
 
   const [phase, setPhase] = useState('idle'); // idle | spinning | presenting
   const busy = phase !== 'idle';
@@ -98,7 +95,7 @@ export default function SlotsApp() {
   }, [session.identity, loadConfig, loadCommitment]);
   useEffect(() => { if (session.sessionError) { setError(session.sessionError); session.clearSessionError(); } }, [session.sessionError]); // eslint-disable-line react-hooks/exhaustive-deps
   // The wallet signed in from another browser: the server closed this session. Auto stops, the page is in Demo.
-  useEffect(() => { if (session.elsewhere) { autoRef.current = false; setAutoSpin(false); setWalletOpen(false); } }, [session.elsewhere]);
+  useEffect(() => { if (session.elsewhere) { autoRef.current = false; setAutoSpin(false); setSheet(null); } }, [session.elsewhere]);
   const gameClosed = config?.enabled === false;
 
   // Bet level, the table limit and the balance.
@@ -161,9 +158,9 @@ export default function SlotsApp() {
 
   const [paytableOpen, setPaytableOpen] = useState(false);
   const [fairnessOpen, setFairnessOpen] = useState(false);
-  const [soundOpen, setSoundOpen] = useState(false);
-  const [walletOpen, setWalletOpen] = useState(false);
-  const anyModal = paytableOpen || fairnessOpen || soundOpen || walletOpen || session.connectNoticeOpen || !session.ageOk;
+  const [sheet, setSheet] = useState(null); // { tab } while the profile pop-up is open
+  const inbox = useInbox({ ready: !!user, quiet: busy || autoSpin });
+  const anyModal = paytableOpen || fairnessOpen || !!sheet || session.connectNoticeOpen || !session.ageOk;
 
   const ready = !!user && !busy && !blocked && !gameClosed && !!config && isCommitmentValid(commitment) && betState.allowed && balance != null && balance >= bet;
 
@@ -369,6 +366,7 @@ export default function SlotsApp() {
   }, []);
 
   const chooseMode = (m) => { if (busy || autoSpin) return; const reason = session.chooseMode(m); if (reason) setNotice(reason); else { setError(null); setNotice(null); } };
+  const connect = () => { setSheet(null); session.requestConnect(); };
   const spinLabel = phase === 'idle' ? C.spin : C.spinning;
   const toasts = [
     gameClosed && { kind: 'closed', className: 'game-notice', testid: 'game-closed', title: toastTitle('closed'), text: config.maintenanceMessage || C.gameClosed },
@@ -378,41 +376,12 @@ export default function SlotsApp() {
   ].filter(Boolean);
 
   return <div className={`slot-app casino-app noselect layout-${layout}`} data-layout={layout} data-phase={phase} data-background-locked={anyModal || undefined} data-hidden={hidden || undefined}>
-    <header className="slot-header" inert={anyModal ? true : undefined}>
-      <div className="slot-brand">
-        <BrandLogo />
-        <span className="brand-sub slot-sub">{C.subtitle}</span>
-        <button type="button" className="commitment-button slot-lock" onClick={() => setFairnessOpen(true)} aria-label="Next lock: open the fairness details" title="The lock for your next spin, shown before you bet." data-testid="slot-lock">
-          <span className={`commitment-status ${lastVerdict ? (lastVerdict.ok ? 'ok' : 'bad') : ''}`} aria-hidden="true"><LockGlyph /></span>
-          <span className="commitment-text"><span className="commitment-label">{C.nextLock}</span><code>{commitment ? commitment.serverSeedHash.slice(0, 8) : '…'}</code></span>
-        </button>
-        <LobbyLink className="slot-link" />
-        <SoundQuickControls onOpen={() => setSoundOpen(true)} />
-      </div>
-      <div className="header-right slot-header-right">
-        <div className="header-balance slot-balance">
-          <div className="balance-label-row slot-balance-row">
-            <span className="balance-word">BALANCE</span>
-            {profile && <div className="mode-switch" role="group" aria-label="Real or Demo" data-testid="mode-switch" data-mode={mode}>
-              <button type="button" aria-pressed={mode === 'real'} data-testid="mode-real" className={mode === 'real' ? 'on' : ''} disabled={busy || autoSpin} aria-disabled={!modeInfo.realAvailable}
-                title={modeInfo.realAvailable ? 'Play with real $TICS' : modeInfo.realReason} onClick={() => chooseMode('real')}>Real</button>
-              {modeInfo.demoVisible && <button type="button" aria-pressed={mode === 'demo'} data-testid="mode-demo" className={mode === 'demo' ? 'on' : ''} disabled={busy || autoSpin} title="Play with demo $TICS" onClick={() => chooseMode('demo')}>Demo</button>}
-            </div>}
-          </div>
-          <div className="gold-text slot-balance-amount"><span data-balance-target="header" data-testid="header-balance" data-mode={mode} className={balanceText.length > 14 ? 'long' : undefined}>{balanceText}</span></div>
-        </div>
-        {profile ? (
-          <button type="button" className={`wallet-chip ${walletOpen ? 'open' : ''}`} data-testid="wallet-chip" aria-expanded={walletOpen} onClick={() => setWalletOpen(true)} title="Your profile">
-            <span className="wallet-chip-text">{shortAddress(profile.address)}</span><Avatar address={profile.address} size={mobile ? 22 : 28} className="wallet-chip-avatar" />
-          </button>
-        ) : (
-          <button type="button" className="wallet-connect" data-testid="wallet-connect" onClick={session.requestConnect} disabled={session.walletBusy || busy || autoSpin}>
-            {session.walletBusy ? 'Connecting...' : <><span className="wc-long">Connect wallet</span><span className="wc-short">Connect</span></>}
-          </button>
-        )}
-      </div>
+    <GameHeader page="slot" layout={layout} inert={anyModal}
+      balanceText={balanceText} mode={mode} modeInfo={modeInfo} showSwitch={!!profile} modeDisabled={busy || autoSpin} onMode={chooseMode}
+      lock={{ hash: commitment?.serverSeedHash || null, status: lastVerdict ? (lastVerdict.ok ? 'ok' : 'bad') : '', onTap: () => setSheet({ tab: 'fairness' }), title: 'The lock for your next spin, shown before you bet. Tap to see the fairness details.' }}
+      profile={profile} profileOpen={!!sheet} onProfile={() => setSheet({ tab: 'wallet' })} onConnect={connect} connecting={session.walletBusy} connectDisabled={busy || autoSpin}>
       <GameToast toasts={toasts} onDismiss={(kind) => { if (kind === 'error') setError(null); if (kind === 'info') setNotice(null); if (kind === 'elsewhere') session.clearElsewhere(); }} />
-    </header>
+    </GameHeader>
 
     <main className="slot-main" inert={anyModal ? true : undefined}>
       <section className="slot-stage">
@@ -472,12 +441,20 @@ export default function SlotsApp() {
         <WinCelebration total={celebration.total} stake={celebration.stake} phase={celebration.phase} pace={celebration.pace} mobile={mobile} onSkip={skip} />
       </motion.div>}
     </AnimatePresence>
-    <SoundSettingsDialog open={soundOpen} onClose={() => setSoundOpen(false)} />
     <AnimatePresence>
-      {walletOpen && profile && <WalletPanel profile={profile} wallet={user} mobile={mobile} deposit={null} onTopUp={() => setNotice('Top ups are made on the roulette page for now.')}
-        onRefresh={async () => { await Promise.all([session.refreshProfile(), session.refreshWallet()]); }} onDisconnect={async () => { setWalletOpen(false); await session.disconnectWallet(); }}
-        disconnectDisabled={busy || autoSpin} onClose={() => setWalletOpen(false)} />}
+      {sheet && <ProfileSheet key="profile" page="slot" mobile={mobile} initialTab={sheet.tab} onClose={() => setSheet(null)}
+        profile={profile} wallet={user} mode={mode} balance={user ? shownBalance : null}
+        onConnect={connect} connecting={session.walletBusy} onDisconnect={async () => { setSheet(null); await session.disconnectWallet(); }} disconnectDisabled={busy || autoSpin}
+        deposit={null} onTopUp={() => setNotice('Top ups are made on the roulette page for now.')}
+        onRefresh={async () => { await Promise.all([session.refreshProfile(), session.refreshWallet()]); }}
+        inbox={inbox}
+        historyContent={<SlotHistory refreshKey={lastRound?.roundId || 0} />}
+        fairnessContent={<div className="profile-fairness"><SlotFairnessBody round={lastRound} receipt={lastReceipt} verdict={lastVerdict} idPrefix="profile" />
+          <section className="fair-panel"><h4>{C.nextLock}</h4><code className="fair-mono" data-testid="next-fingerprint">{commitment ? commitment.serverSeedHash : '...'}</code>
+            <p className="fair-note">Shown before you bet. After the spin the key that opens it is revealed, so you can check the reels yourself.</p></section></div>}
+        rows={[{ key: 'pays', label: 'Rules and pays', testid: 'profile-row-pays', onClick: () => { setSheet(null); setPaytableOpen(true); } }]} />}
     </AnimatePresence>
+    {inbox.popupNode}
     <AnimatePresence>{paytableOpen && <SlotPaytable stake={bet} mobile={mobile} onClose={() => setPaytableOpen(false)} />}</AnimatePresence>
     <AnimatePresence>{fairnessOpen && <SlotFairness round={lastRound} receipt={lastReceipt} verdict={lastVerdict} mobile={mobile} onClose={() => setFairnessOpen(false)} />}</AnimatePresence>
     {!session.ageOk && <AgeGate onAccept={session.acceptAge} />}

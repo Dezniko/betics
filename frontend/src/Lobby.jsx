@@ -1,24 +1,23 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence } from 'framer-motion';
-import BrandLogo from './BrandLogo.jsx';
 import GameToast, { toastTitle } from './GameToast.jsx';
-import { SoundQuickControls, SoundSettingsDialog } from './SoundControls.jsx';
-import WalletPanel from './WalletPanel.jsx';
-import Avatar from './Avatar.jsx';
+import GameHeader from './GameHeader.jsx';
+import ProfileSheet from './ProfileSheet.jsx';
+import { useInbox } from './Inbox.jsx';
 import ConnectNotice from './ConnectNotice.jsx';
 import { AgeGate } from './Terms.jsx';
 import CasinoReserve from './CasinoReserve.jsx';
 import SupportLink from './Support.jsx';
 import { WheelDefinitions, RotorArtwork, WheelBall, wheelPoint } from './WheelArtwork.jsx';
 import { pocketAngle } from './wheelMotion.js';
-import { shortAddress } from './walletApi.js';
 import { fmtMoney, fmtTics } from './chips.js';
 import useSession from './useSession.js';
+import { headerLayout } from './headerModel.js';
 import './lobby.css';
 
-// The casino lobby at /: the same header family as the games (logo, sound, balance, Real or Demo,
-// wallet), a one line welcome, one card per game with a gold Play button, the casino reserve card on
-// desktop and the help links. One screen on every viewport: nothing scrolls.
+// The casino lobby at /: the shared header (GameHeader) and profile pop-up (ProfileSheet) of the games,
+// a one line welcome, one card per game with a gold Play button, the casino reserve card on desktop
+// and the help links. One screen on every viewport: nothing scrolls.
 export const GAMES = Object.freeze([
   Object.freeze({ id: 'roulette', href: '/roulette', name: 'Roulette', tagline: 'Classic European roulette on green felt, every spin checkable in your browser.',
     facts: Object.freeze(['European wheel', '97.3% payback', 'Bets from 1 $TICS']) }),
@@ -73,19 +72,18 @@ function GameCard({ game, children }) {
 
 export default function Lobby() {
   const vp = useViewport();
-  const landscape = vp.w > vp.h && vp.h < 560;
-  const desktop = vp.w >= 1000 && !landscape;
-  const layout = landscape ? 'landscape' : desktop ? 'desktop' : 'portrait';
+  const layout = headerLayout(vp.w, vp.h);
+  const desktop = layout === 'desktop';
   const mobile = !desktop;
   const session = useSession();
   const { user, profile, mode, modeInfo, balance } = session;
   const [notice, setNotice] = useState(null);
   const [error, setError] = useState(null);
-  const [soundOpen, setSoundOpen] = useState(false);
-  const [walletOpen, setWalletOpen] = useState(false);
+  const [sheet, setSheet] = useState(null); // { tab } while the profile pop-up is open
+  const inbox = useInbox({ ready: !!user, quiet: false });
   useEffect(() => { if (session.sessionError) { setError(session.sessionError); session.clearSessionError(); } }, [session.sessionError]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (session.elsewhere) setWalletOpen(false); }, [session.elsewhere]);
-  const anyModal = soundOpen || walletOpen || session.connectNoticeOpen || !session.ageOk;
+  useEffect(() => { if (session.elsewhere) setSheet(null); }, [session.elsewhere]);
+  const anyModal = !!sheet || session.connectNoticeOpen || !session.ageOk;
   const balanceText = user && balance != null ? (layout === 'portrait' ? fmtTics(balance, { decimals: Math.round(balance) % 100 === 0 ? 0 : 2 }) : fmtMoney(balance)) : '...';
   const chooseMode = (m) => { const reason = session.chooseMode(m); if (reason) setNotice(reason); else { setError(null); setNotice(null); } };
   const toasts = [
@@ -93,38 +91,14 @@ export default function Lobby() {
     notice && !error && { kind: 'info', className: 'game-notice', title: toastTitle('info', notice), text: notice, dismissible: true, testid: 'lobby-notice' },
     error && { kind: 'error', className: 'game-error', title: toastTitle('error', error), text: error, dismissible: true, testid: 'lobby-error' },
   ].filter(Boolean);
+  const connect = () => { setSheet(null); session.requestConnect(); };
 
   return <div className={`lobby casino-app noselect layout-${layout}`} data-layout={layout} data-background-locked={anyModal || undefined}>
-    <header className="lobby-header" inert={anyModal ? true : undefined}>
-      <div className="lobby-brand">
-        <BrandLogo />
-        <span className="brand-sub lobby-sub">CASINO</span>
-        <SoundQuickControls onOpen={() => setSoundOpen(true)} />
-      </div>
-      <div className="header-right lobby-header-right">
-        <div className="header-balance lobby-balance">
-          <div className="balance-label-row lobby-balance-row">
-            <span className="balance-word">BALANCE</span>
-            {profile && <div className="mode-switch" role="group" aria-label="Real or Demo" data-testid="mode-switch" data-mode={mode}>
-              <button type="button" aria-pressed={mode === 'real'} data-testid="mode-real" className={mode === 'real' ? 'on' : ''} aria-disabled={!modeInfo.realAvailable}
-                title={modeInfo.realAvailable ? 'Play with real $TICS' : modeInfo.realReason} onClick={() => chooseMode('real')}>Real</button>
-              {modeInfo.demoVisible && <button type="button" aria-pressed={mode === 'demo'} data-testid="mode-demo" className={mode === 'demo' ? 'on' : ''} title="Play with demo $TICS" onClick={() => chooseMode('demo')}>Demo</button>}
-            </div>}
-          </div>
-          <div className="gold-text lobby-balance-amount"><span data-balance-target="header" data-testid="header-balance" data-mode={mode} className={balanceText.length > 14 ? 'long' : undefined}>{balanceText}</span></div>
-        </div>
-        {profile ? (
-          <button type="button" className={`wallet-chip ${walletOpen ? 'open' : ''}`} data-testid="wallet-chip" aria-expanded={walletOpen} onClick={() => setWalletOpen(true)} title="Your profile">
-            <span className="wallet-chip-text">{shortAddress(profile.address)}</span><Avatar address={profile.address} size={mobile ? 22 : 28} className="wallet-chip-avatar" />
-          </button>
-        ) : (
-          <button type="button" className="wallet-connect" data-testid="wallet-connect" onClick={session.requestConnect} disabled={session.walletBusy}>
-            {session.walletBusy ? 'Connecting...' : <><span className="wc-long">Connect wallet</span><span className="wc-short">Connect</span></>}
-          </button>
-        )}
-      </div>
+    <GameHeader page="lobby" layout={layout} inert={anyModal}
+      balanceText={balanceText} mode={mode} modeInfo={modeInfo} showSwitch={!!profile} onMode={chooseMode}
+      profile={profile} profileOpen={!!sheet} onProfile={() => setSheet({ tab: 'wallet' })} onConnect={connect} connecting={session.walletBusy}>
       <GameToast toasts={toasts} onDismiss={(kind) => { if (kind === 'error') setError(null); if (kind === 'info') setNotice(null); if (kind === 'elsewhere') session.clearElsewhere(); }} />
-    </header>
+    </GameHeader>
 
     <main className="lobby-main" inert={anyModal ? true : undefined}>
       <p className="lobby-welcome" data-testid="lobby-welcome">{WELCOME}</p>
@@ -142,12 +116,18 @@ export default function Lobby() {
       </div>
     </main>
 
-    <SoundSettingsDialog open={soundOpen} onClose={() => setSoundOpen(false)} />
     <AnimatePresence>
-      {walletOpen && profile && <WalletPanel profile={profile} wallet={user} mobile={mobile} deposit={null} onTopUp={() => setNotice('Top ups are made on the roulette page for now.')}
-        onRefresh={async () => { await Promise.all([session.refreshProfile(), session.refreshWallet()]); }} onDisconnect={async () => { setWalletOpen(false); await session.disconnectWallet(); }}
-        onClose={() => setWalletOpen(false)} />}
+      {sheet && <ProfileSheet key="profile" page="lobby" mobile={mobile} initialTab={sheet.tab} onClose={() => setSheet(null)}
+        profile={profile} wallet={user} mode={mode} balance={user ? balance : null}
+        onConnect={connect} connecting={session.walletBusy} onDisconnect={async () => { setSheet(null); await session.disconnectWallet(); }}
+        deposit={null} onTopUp={() => setNotice('Top ups are made on the roulette page for now.')}
+        onRefresh={async () => { await Promise.all([session.refreshProfile(), session.refreshWallet()]); }}
+        inbox={inbox}
+        historyContent={<div className="profile-guest-wallet"><p className="fair-note">Your recent rounds are listed inside each game: open Roulette or Gods of Power and tap your profile.</p></div>}
+        fairnessContent={<div className="profile-guest-wallet"><p className="fair-note">Every round is locked before you bet and opened after it. Each game shows its lock and lets you check any round in your browser.</p><a className="fair-btn fair-btn-ghost" href="/how-it-works">How it works</a></div>}
+        rows={[{ key: 'how', label: 'How it works', href: '/how-it-works', testid: 'profile-row-how' }]} />}
     </AnimatePresence>
+    {inbox.popupNode}
     {!session.ageOk && <AgeGate onAccept={session.acceptAge} />}
     {session.ageOk && session.connectNoticeOpen && <ConnectNotice onContinue={session.continueConnect} onClose={session.closeConnectNotice} />}
   </div>;

@@ -15,44 +15,7 @@ body:has(.slot-app) { height: 100dvh; min-height: 0; overflow: hidden; overscrol
 .slot-app.layout-landscape { gap: 6px; padding: calc(4px + env(safe-area-inset-top, 0px)) max(8px, env(safe-area-inset-right, 0px)) calc(4px + env(safe-area-inset-bottom, 0px)) max(8px, env(safe-area-inset-left, 0px)); }
 .slot-app .fair-sheet { max-height: 92dvh; }
 
-/* ---- header ---- */
-.slot-header { position: relative; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; max-width: 1100px; margin: 0 auto; min-width: 0; }
-.slot-brand { display: grid; grid-template-columns: auto auto; grid-template-areas: "logo sound" "lock link"; align-items: center; justify-content: start; gap: 4px 8px; min-width: 0; }
-.slot-brand .brand-logo { grid-area: logo; }
-.slot-app.casino-app .slot-brand .brand-logo img { height: 34px; margin: 0; }
-.slot-brand .brand-sub { display: none; }
-.slot-app .brand-beta { top: 0; right: -2px; transform: none; padding: 2px 4px 1px; font-size: 6px; letter-spacing: .1em; box-shadow: 0 0 6px rgba(130, 80, 255, 0.35); }
-.slot-app.layout-desktop .brand-beta { font-size: 7px; right: -4px; }
-.slot-brand .sound-toolbar { grid-area: sound; margin: 0; justify-self: start; }
-.slot-brand .sound-toolbar > button { width: 28px; height: 26px; }
-.slot-brand .slot-lock { grid-area: lock; font-size: 9px; line-height: 14px; min-height: 24px; margin: 0; }
-.slot-link { grid-area: link; min-height: 24px; padding: 0 9px; font-size: 8px; }
-.slot-header-right { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-.slot-balance { text-align: right; }
-.slot-balance-row { display: flex; align-items: center; justify-content: flex-end; gap: 6px; font-size: 8px; line-height: 12px; color: var(--bx-mute); }
-.slot-balance .mode-switch > button { min-width: 34px; padding: 0 6px; font-size: 10px; line-height: 16px; }
-.slot-balance-amount { font-size: 18px; line-height: 22px; font-weight: 800; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.slot-header .wallet-connect, .slot-header .wallet-chip { min-height: 30px; padding: 0 9px; font-size: 11px; border-radius: 9px; }
-.slot-header .wallet-chip { padding: 0 3px 0 9px; gap: 6px; }
-.layout-portrait .slot-header-right { flex-direction: column; align-items: flex-end; gap: 4px; flex: 0 1 auto; min-width: 0; max-width: 60%; }
-.layout-portrait .slot-balance-amount { max-width: 100%; overflow: hidden; }
-.layout-portrait .slot-balance-amount .long { font-size: 15px; }
-.slot-balance-amount .long { letter-spacing: -0.01em; }
-.layout-portrait .wc-long { display: none; } .layout-portrait .wc-short { display: inline; }
-.layout-landscape .slot-brand { grid-template-columns: auto auto auto auto; grid-template-areas: "logo lock link sound"; gap: 0 8px; }
-.slot-app.layout-landscape .slot-brand .brand-logo img { height: 30px; }
-.layout-landscape .slot-balance { display: flex; align-items: baseline; gap: 8px; }
-.layout-landscape .slot-balance-amount { font-size: 16px; }
-.layout-desktop .slot-brand { grid-template-columns: auto auto auto auto; grid-template-areas: "logo sub lock link" "logo sub sound sound"; gap: 2px 12px; }
-.slot-app.layout-desktop .slot-brand .brand-logo img { height: 64px; }
-.layout-desktop .slot-brand .brand-sub { display: block; grid-area: sub; }
-.layout-desktop .slot-brand .slot-lock { font-size: 10px; min-height: 28px; }
-.layout-desktop .slot-link { min-height: 28px; font-size: 9px; }
-.layout-desktop .slot-balance-row { font-size: 9px; }
-.layout-desktop .slot-balance-amount { font-size: 24px; line-height: 28px; }
-.layout-desktop .slot-header .wallet-connect, .layout-desktop .slot-header .wallet-chip { min-height: 38px; padding: 0 14px; font-size: 13px; }
-.layout-desktop .slot-header .wallet-chip { padding: 0 4px 0 14px; }
-.slot-header .game-toasts { top: calc(100% + 6px); }
+/* ---- header: the shared GameHeader (gameHeader.css) ---- */
 
 /* ---- main ---- */
 .slot-main { flex: 1 1 0; min-height: 0; min-width: 0; width: 100%; max-width: 1100px; margin: 0 auto; display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 8px; }

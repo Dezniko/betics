@@ -1,0 +1,94 @@
+/* The shared profile pop-up (ProfileSheet.jsx). The shell classes (.profile-panel, .profile-dropdown,
+   .profile-folder-tab, .profile-body, .profile-tabs, .profile-rows) live in index.css; this file adds
+   the wallet card, the rows under the tabs, the history list and the foot links. Mock: a 360 to 420 px
+   card, 12 px radius inner cards, rows separated by hairlines, muted notes on the right. */
+.profile-sheet .profile-body { gap: 10px; }
+.profile-sheet.fair-sheet { max-height: 92dvh; }
+
+/* wallet card */
+.profile-wallet-card { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 14px; min-width: 0;
+  background: radial-gradient(120% 120% at 0% 0%, rgba(166,60,255,.22), transparent 55%), radial-gradient(120% 120% at 100% 100%, rgba(34,211,255,.14), transparent 55%), #14141d;
+  border: 1px solid rgba(241,220,170,.18); box-shadow: inset 0 1px 0 rgba(255,255,255,.05); }
+.profile-wallet-card .profile-avatar { flex: none; width: 44px; height: 44px; box-shadow: 0 0 0 2px #0b0a10, 0 0 0 3.5px rgba(214,176,106,.8), 0 0 18px rgba(166,60,255,.45); }
+.profile-guest-avatar { display: grid; place-items: center; border-radius: 50%; background: var(--bx-neon); color: #fff; }
+.profile-wallet-text { display: grid; gap: 4px; min-width: 0; flex: 1; }
+.profile-wallet-balance { font-size: 18px; font-weight: 800; line-height: 1.1; font-variant-numeric: tabular-nums; letter-spacing: .01em;
+  background: linear-gradient(180deg, #fbefcf, #e2bf76 55%, #b98f45); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.profile-wallet-meta { font-size: 11px; line-height: 1.4; color: var(--bx-mute); min-width: 0; }
+.profile-wallet-address { font-size: 10.5px !important; color: #cfcbd9 !important; overflow-wrap: anywhere; letter-spacing: 0; }
+.profile-wallet-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.profile-tag { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; background: rgba(0,0,0,.35); border: 1px solid rgba(255,255,255,.08); font-size: 10.5px; line-height: 1.3; color: var(--bx-mute); white-space: nowrap; }
+.profile-tag.mode-real { color: #fff; background: var(--bx-neon); border-color: transparent; }
+.profile-tag.mode-demo { color: var(--bx-gold-hi); border-color: rgba(214,176,106,.4); }
+.profile-connect { justify-self: start; min-height: 34px; padding: 0 16px; margin-top: 2px; font-size: 13px; }
+
+/* main tabs: outlined segments, gold on the active one (mock) */
+.profile-sheet .profile-main-tabs { grid-template-columns: repeat(3, 1fr); padding: 0; gap: 6px; background: transparent; border: 0; }
+.profile-sheet .profile-main-tabs button { min-height: 34px; border-radius: 9px; border: 1px solid var(--bx-line); color: var(--bx-mute); font-size: 12px; font-weight: 700; background: transparent; box-shadow: none; }
+.profile-sheet .profile-main-tabs button.on { color: var(--bx-gold-hi); border-color: rgba(214,176,106,.6); background: rgba(214,176,106,.08); box-shadow: none; }
+.profile-main-body { display: grid; gap: 10px; min-width: 0; }
+.profile-main-body > .fair-note { margin: 0; }
+.profile-sheet .wallet-tabs { padding: 3px; }
+.profile-sheet .wallet-tabs button { min-height: 32px; font-size: 12px; }
+.wallet-content { display: grid; gap: 10px; }
+.profile-guest-wallet { display: grid; gap: 6px; padding: 2px 2px 0; }
+
+/* rows under the tabs */
+.profile-rows-list { display: grid; }
+.profile-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 10px 4px; border-top: 1px solid var(--bx-line); background: transparent; color: var(--bx-text); font-size: 13px; font-weight: 500; text-align: left; text-decoration: none; touch-action: manipulation; cursor: pointer; }
+.profile-rows-list > :first-child > .profile-row, .profile-rows-list > a.profile-row:first-child { border-top: 0; }
+.profile-row:disabled { opacity: .5; cursor: default; }
+.profile-row-label { flex: 1; min-width: 0; }
+.profile-row-note { font-size: 11px; color: var(--bx-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 55%; }
+.profile-row-chev { flex: none; color: var(--bx-mute); transition: transform .2s ease; }
+.profile-row-chev.down.open { transform: rotate(180deg); }
+.profile-row.danger { color: #ffb3c0; }
+.profile-row-wrap.open > .profile-row { color: var(--bx-gold-hi); }
+.profile-row-body { padding: 4px 2px 12px; display: grid; gap: 10px; }
+.profile-row-body .sound-panel { padding: 10px; border-radius: 12px; background: #101017; border: 1px solid var(--bx-line); }
+.profile-row-body .inbox-list { display: grid; gap: 10px; }
+.profile-row-body .inbox-card { width: 100%; box-shadow: none; padding: 12px 14px; }
+.profile-row-body .inbox-item { gap: 4px; }
+@media (hover: hover) { .profile-row:not(:disabled):hover { color: #fff; } .profile-row:not(:disabled):hover .profile-row-chev { color: var(--bx-gold-hi); } }
+
+/* foot links */
+.profile-foot-links { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px 16px; padding-top: 4px; font-size: 11.5px; color: var(--bx-mute); }
+.profile-foot-links a { color: var(--bx-mute); text-decoration: none; }
+.profile-foot-links a:hover { color: var(--bx-gold-hi); }
+.profile-foot-links .profile-foot-support { padding: 0; background: none; border: 0; gap: 6px; box-shadow: none; }
+.profile-foot-links .profile-foot-support .profile-support-icon { width: 18px; height: 18px; box-shadow: none; }
+.profile-foot-links .profile-foot-support .profile-support-icon svg { width: 10px; height: 10px; }
+.profile-foot-links .profile-foot-support .profile-support-text strong { font-size: 11.5px; font-weight: 500; color: inherit; }
+.profile-foot-links .profile-foot-support .profile-support-text small, .profile-foot-links .profile-foot-support .profile-support-arrow { display: none; }
+
+/* history list (roulette rounds, slot rounds) */
+.profile-history { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; max-height: 320px; overflow-y: auto; overscroll-behavior: contain; }
+.profile-history li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; align-items: center; padding: 8px 10px; border-radius: 10px; background: #101017; border: 1px solid var(--bx-line); font-size: 12px; }
+.profile-history li[role='button'] { cursor: pointer; transition: border-color .15s ease; }
+.profile-history li[role='button']:hover { border-color: rgba(214,176,106,.45); }
+.profile-history-main { display: grid; gap: 1px; min-width: 0; }
+.profile-history-title { color: var(--bx-text); font-weight: 600; }
+.profile-history-title small { color: #807d93; font-weight: 400; margin-left: 4px; }
+.profile-history-sub { color: var(--bx-mute); font-size: 11px; }
+.profile-history-net { font-weight: 800; font-variant-numeric: tabular-nums; text-align: right; color: var(--bx-mute); }
+.profile-history-net.win { color: #6ee7a8; } .profile-history-net.loss { color: #fca5a5; }
+.profile-history-pocket { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; color: #fff; flex: none; }
+.profile-history-pocket.red { background: #b91c1c; } .profile-history-pocket.black { background: #27272a; border: 1px solid rgba(255,255,255,.1); } .profile-history-pocket.green { background: #059669; }
+.profile-history .with-pocket { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+.profile-history-details { color: var(--bx-gold); font-size: 11px; white-space: nowrap; }
+.profile-history-check { grid-column: 1 / -1; display: grid; gap: 4px; justify-items: start; }
+.profile-history-verdict { font-size: 11px; font-weight: 700; }
+.profile-history-verdict.ok { color: #6ee7a8; } .profile-history-verdict.bad { color: #fca5a5; }
+.profile-history-check .slot-fair-problems { margin: 0 0 0 16px; font-size: 11px; }
+.profile-history-empty { margin: 0; }
+
+/* roulette fairness tab reuses the How it works panels */
+.profile-fairness { display: grid; gap: 8px; }
+.profile-fairness .fair-panel { margin-bottom: 0; }
+.profile-fairness .fair-picture { margin: 0; }
+.profile-fairness .fair-foot { margin: 0; }
+.profile-fairness .slot-fairness-body .fair-verdict { margin-bottom: 0; }
+@media (max-width: 420px) {
+  .profile-wallet-balance { font-size: 16px; }
+  .profile-sheet .profile-main-tabs button { font-size: 11.5px; min-height: 32px; }
+}

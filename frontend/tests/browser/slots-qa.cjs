@@ -54,7 +54,7 @@ async function open(w, h, url = `${APP_URL}/godsofpower`) {
   return { ws, send, ev, ready, screenshot, tap, errors, lastSpinReply, close: async () => { await send('Page.close').catch(() => {}); ws.close(); } };
 }
 
-const CONTROLS = ['[data-testid="slot-spin"]', '[data-testid="slot-bet"]', '[data-testid="slot-paytable-btn"]', '[data-testid="slot-fairness-btn"]', '[data-testid="slot-auto"]', '[data-testid="header-balance"]', '[data-testid="slot-lock"]', '[data-testid="slot-reels"]', '[data-testid="wallet-connect"]'];
+const CONTROLS = ['[data-testid="slot-spin"]', '[data-testid="slot-bet"]', '[data-testid="slot-paytable-btn"]', '[data-testid="slot-fairness-btn"]', '[data-testid="slot-auto"]', '[data-testid="header-balance"]', '[data-testid="header-lock"]', '[data-testid="slot-reels"]', '[data-testid="wallet-connect"]'];
 async function layoutChecks(x, w, h, label) {
   const m = await x.ev(`(()=>{const sel=${JSON.stringify(CONTROLS)};const rects=sel.map(s=>{const e=document.querySelector(s);if(!e)return null;const r=e.getBoundingClientRect();return {s,x:r.x,y:r.y,r:r.right,b:r.bottom,w:r.width,h:r.height}});
     const overlaps=[];for(let i=0;i<rects.length;i++)for(let j=i+1;j<rects.length;j++){const a=rects[i],b=rects[j];if(!a||!b)continue;const ix=Math.min(a.r,b.r)-Math.max(a.x,b.x),iy=Math.min(a.b,b.b)-Math.max(a.y,b.y);if(ix>1&&iy>1)overlaps.push([a.s,b.s,Math.round(ix),Math.round(iy)])}
@@ -126,7 +126,7 @@ async function responsiveness(x, label, baseline) {
     assert.equal(reply.balanceAfterCents, reply.balanceBeforeCents - reply.stake + reply.totalPayoutCents, `${label}: server balance arithmetic`);
     const receiptSaved = await x.ev(`!!localStorage.getItem('betics:slot-receipt:'+${JSON.stringify(reply.requestId)})`);
     assert.ok(receiptSaved, `${label}: pre-bet receipt saved under betics:slot-receipt:<requestId>`);
-    const lockOk = await x.ev(`document.querySelector('[data-testid="slot-lock"] .commitment-status').classList.contains('ok')`);
+    const lockOk = await x.ev(`document.querySelector('[data-testid="header-lock"] .commitment-status').classList.contains('ok')`);
     assert.ok(lockOk, `${label}: the round was verified in the browser`);
     shots.push(await x.screenshot(`${label}-settled`));
     await layoutChecks(x, w, h, `${label} after the spin`);

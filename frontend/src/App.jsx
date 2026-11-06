@@ -3,25 +3,23 @@ import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import RouletteWheel from './RouletteWheel.jsx';
 import PocketCloseup from './PocketCloseup.jsx';
 import MobileRoundFeedback from './MobileRoundFeedback.jsx';
-import { SoundQuickControls, SoundSettingsDialog } from './SoundControls.jsx';
-import Inbox from './Inbox.jsx';
+import { useInbox } from './Inbox.jsx';
+import GameHeader from './GameHeader.jsx';
+import ProfileSheet from './ProfileSheet.jsx';
+import { headerLayout } from './headerModel.js';
 import { lockBackgroundScroll } from './modalScrollLock.js';
 import RouletteBoard from './RouletteBoard.jsx';
 import RecentNumbers from './RecentNumbers.jsx';
 import RoundDetail from './RoundDetail.jsx';
 import { Chip } from './ChipView.jsx';
 import { DENOMS, CHIP_VALUES, fmtShort, fmtMoney, overMaxBet } from './chips.js';
-import WalletPanel from './WalletPanel.jsx';
-import Avatar from './Avatar.jsx';
 import GameToast, { toastTitle } from './GameToast.jsx';
 import CasinoReserve, { refreshCasinoReserve, useCasinoReserve } from './CasinoReserve.jsx';
 import SupportLink from './Support.jsx';
 import { AgeGate } from './Terms.jsx';
 import ConnectNotice from './ConnectNotice.jsx';
-import BrandLogo from './BrandLogo.jsx';
-import LobbyLink from './LobbyLink.jsx';
 import { needsConnectNotice, acceptConnectNotice } from './connectNotice.js';
-import { walletApi, resolveMode, modeBalance, balanceField, shortAddress, STORAGE, DEPOSIT_FINAL, restoreSavedDeposit, saveDepositFor, clearDepositFor, isSignedInElsewhere } from './walletApi.js';
+import { walletApi, resolveMode, modeBalance, balanceField, STORAGE, DEPOSIT_FINAL, restoreSavedDeposit, saveDepositFor, clearDepositFor, isSignedInElsewhere } from './walletApi.js';
 import { usePlayGuard, PlayCover } from './PlayGuard.jsx';
 import { topUpState, DEPOSIT_PAUSED_MESSAGE, DEPOSITS_CLOSED_MESSAGE, OFFICIAL_TICS, CASINO_WALLET, CHAIN_ID } from './depositTarget.js';
 import { classifySpinRefusal, budgetFor, recordRefusal, refusalStopMessage, refusalRetiredMessage, rememberOpenLock, updateOpenLock, forgetOpenLock, findOpenLock, mustRetireLock, locksToCheck, findRoundForLock,
@@ -111,9 +109,7 @@ export default function App() {
   const [verifyOpen, setVerifyOpen] = useState(false);
   const [verifyResult, setVerifyResult] = useState(null);
   const [verifyLoading, setVerifyLoading] = useState(false);
-  const [howItWorksOpen, setHowItWorksOpen] = useState(false);
-  const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false);
-  const [soundSettingsOpen, setSoundSettingsOpen] = useState(false);
+  const [sheet, setSheet] = useState(null); // { tab } while the profile pop-up is open
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null); // neutral info (e.g. table cleared), not an error
   const [lastBets, setLastBets] = useState([]);
@@ -137,7 +133,6 @@ export default function App() {
   const [ageOk, setAgeOk] = useState(() => readStore(STORAGE.adult) === '1');
   const [connectNoticeOpen, setConnectNoticeOpen] = useState(false); // shown once per browser before the wallet picker
   const [storedMode, setStoredMode] = useState(() => readStore(STORAGE.mode));
-  const [walletOpen, setWalletOpen] = useState(false);
   const [walletBusy, setWalletBusy] = useState(false);
   const [deposit, setDeposit] = useState(null);
   const walletAtRef = useRef(0); // when the balances were last read from the server
@@ -532,7 +527,7 @@ export default function App() {
   // The wallet signed in from another browser: the server closed this session. Auto stops, the page goes back to Demo.
   const signedOutElsewhere = useCallback(async (e) => {
     setElsewhere(e?.message || 'You connected this wallet in another browser or device. Connect again to play here.');
-    setWalletOpen(false); setDeposit(null);
+    setSheet(null); setDeposit(null);
     await switchIdentityRef.current?.(null).catch(() => {});
   }, []);
   const refreshProfile = useCallback(async () => {
@@ -591,7 +586,7 @@ export default function App() {
     if (busy || autoSpin) return;
     await walletApi.logout().catch(() => {});
     if (walletModule) walletModule.then((m) => m.disconnectWallet()).catch(() => {});
-    setWalletOpen(false); setDeposit(null); // the saved top up stays with that wallet
+    setSheet(null); setDeposit(null); // the saved top up stays with that wallet
     await switchIdentity(null).catch((e) => setError(e.message));
   };
   const topUp = async (units) => {
@@ -1310,7 +1305,11 @@ export default function App() {
   const landscape = vp.w > vp.h && vp.h < 560;
   const portraitPhone = vp.w < vp.h && vp.w < 700;
   const mobileGame = vp.w < 1100 || landscape;
-  const blockShortcuts = verifyOpen || howItWorksOpen || !!detailRound || mobileHistoryOpen || soundSettingsOpen || walletOpen || connectNoticeOpen || !ageOk;
+  const headerLayoutName = headerLayout(vp.w, vp.h);
+  const inbox = useInbox({ ready: !!user, quiet: busy || autoSpin });
+  const openProfile = (tab = 'wallet') => setSheet({ tab });
+  const connectFromHeader = () => { setSheet(null); requestConnect(); };
+  const blockShortcuts = verifyOpen || !!detailRound || !!sheet || connectNoticeOpen || !ageOk;
   const anyModalOpen = blockShortcuts || (!mobileGame && !!winPopup);
   useLayoutEffect(() => lockBackgroundScroll(anyModalOpen), [anyModalOpen]);
   const stageVisible = spinning || landingPocket !== null || revealPhase === 'totaling' || revealPhase === 'transferring';
@@ -1355,6 +1354,81 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // The Fairness tab of the profile sheet: the How we keep it fair content (lock pill opens it here).
+  const fairnessTab = <div className="profile-fairness" data-testid="how-fair">
+    {lastResult && <button type="button" className="fair-btn fair-btn-wide" data-testid="check-last-spin" onClick={() => { setSheet(null); verifyLastOutcome(); }}>Check the last spin</button>}
+      <FairFlow />
+      <section className="fair-panel" data-testid="next-fingerprint-box">
+        <h4>Lock for your next spin</h4>
+        <code className="fair-mono" data-testid="next-fingerprint">{commitment ? commitment.serverSeedHash : 'loading...'}</code>
+        <div className="fair-btn-row">
+          <button type="button" className="fair-btn" disabled={!commitment} onClick={() => { navigator.clipboard?.writeText(commitment.serverSeedHash).then(() => { setLockCopied(true); setTimeout(() => setLockCopied(false), 1400); }).catch(() => {}); }}>{lockCopied ? 'Copied' : 'Copy lock'}</button>
+          <button type="button" className="fair-btn fair-btn-ghost" data-testid="rotate-lock" disabled={busy || verifyLoading || autoSpin || verificationBlocked || !commitment || clientSeedSaving} onClick={rotateLock}>{clientSeedSaving && operationRef.current === 'rotate' ? 'Making new lock...' : 'Get a new lock'}</button>
+        </div>
+        <p className="fair-note">A new lock is made after every spin. Tap Get a new lock if you want a fresh one now.</p>
+        {retiredLock && <div className="fair-retired" data-testid="retired-lock" data-fits={retiredLock.fits ? 'yes' : 'no'}>
+          <p>{retiredLock.fits ? 'Done. The old lock was never used, so here is its key. It fits the old lock.' : 'The old key does not fit the old lock.'}</p>
+          <code className="fair-mono">{retiredLock.serverSeed}</code>
+          <a className="fair-btn fair-btn-ghost" href={chefLockUrl(retiredLock.serverSeed)} target="_blank" rel="noopener noreferrer">Check the old key yourself</a>
+        </div>}
+      </section>
+      <RefusedSpins entries={readRefusedLog()} />
+      <section className="fair-panel">
+        <h4>Your lucky word</h4>
+        <p className="fair-note">Mixed into every spin together with fresh randomness from your device. Change it to anything you like.</p>
+        <div className="fair-btn-row">
+          <input
+            id="client-seed" name="clientSeed" autoComplete="off"
+            value={clientSeedDraft}
+            aria-label="Your client seed"
+            disabled={busy || verifyLoading || autoSpin || clientSeedSaving || verificationBlocked || !commitment}
+            onChange={(e) => setClientSeedDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') saveClientSeed(); }}
+            maxLength={64}
+            className="fair-input"
+          />
+          <button
+            type="button"
+            className="fair-btn"
+            onClick={saveClientSeed}
+            disabled={busy || verifyLoading || autoSpin || verificationBlocked || !commitment || clientSeedSaving || !clientSeedDraft.trim() || clientSeedDraft.trim() === commitment?.clientSeed}
+          >
+            {clientSeedSaving && operationRef.current === 'seed' ? 'Saving...' : 'Save'}
+          </button>
+        </div>
+      </section>
+      <p className="fair-foot">This proves how each spin’s number was produced. It isn’t an external audit of the casino.</p>
+  </div>;
+  // Recent rounds, shared by the desktop panel and the profile sheet's History tab.
+  const historyRows = history.filter((r) => r.outcome_json && (!r.game || r.game === 'roulette'));
+  const historyList = <div className="space-y-1 max-h-72 overflow-y-auto" data-testid="roulette-history">
+    {historyRows.map((r) => {
+      const outcome = JSON.parse(r.outcome_json);
+      const net = (r.payout_cents || 0) - r.stake_cents;
+      const col = pocketColor(outcome.pocket);
+      return (
+        <div
+          key={r.id}
+          role="button"
+          tabIndex={0}
+          onClick={() => { setSheet(null); setDetailRound(r); }}
+          onKeyDown={(e) => { if (e.key === 'Enter') { setSheet(null); setDetailRound(r); } }}
+          className="flex items-center gap-3 text-xs py-2 px-2.5 rounded-lg bg-black/20 hover:bg-white/5 cursor-pointer transition-colors border border-transparent hover:border-[#d6b06a]/30"
+          title="Click for the full breakdown"
+        >
+          <span className={`w-7 h-7 rounded-full flex items-center justify-center text-[12px] font-bold text-white shrink-0 ${col === 'red' ? 'bg-red-700' : col === 'green' ? 'bg-emerald-600' : 'bg-zinc-800 border border-white/10'}`}>{outcome.pocket}</span>
+          <span className="flex-1 min-w-0">
+            <span className="text-[#ede9e1]">Round #{r.id}</span>
+            <span className="text-[#9b98ab]"> · bet {fmt(r.stake_cents)}</span>
+          </span>
+          <span className={`font-bold ${net > 0 ? 'text-emerald-400' : net < 0 ? 'text-red-400' : 'text-[#9b98ab]'}`}>{net > 0 ? '+' : net < 0 ? '-' : ''}{fmt(Math.abs(net))}</span>
+          <span className="text-[#d6b06a] text-[11px] shrink-0">check this round ›</span>
+        </div>
+      );
+    })}
+    {historyRows.length === 0 && <div className="text-xs text-[#63607a]">No rounds yet. Place a bet and spin.</div>}
+  </div>;
+
   const boardActionsRef=useRef({});
   boardActionsRef.current={addBet,removeBet};
   const boardAdd=useCallback(b=>boardActionsRef.current.addBet(b),[]);
@@ -1362,68 +1436,11 @@ export default function App() {
 
   return (
     <div data-background-locked={anyModalOpen} style={controlsHeight ? { '--controls-height': `${controlsHeight}px` } : undefined} className={`casino-app min-h-screen text-[#ede9e1] ${mobileGame ? 'mobile-game' : ''} ${landscape ? 'phone-landscape' : ''} ${portraitPhone ? 'phone-portrait' : ''} ${landscape ? 'px-3 py-1.5' : 'px-3 sm:px-6 py-4 sm:py-8'}`}>
-      <header inert={anyModalOpen ? true : undefined} className={`game-header relative max-w-[1280px] mx-auto flex items-center justify-between gap-3 noselect ${landscape ? 'mb-1.5' : 'mb-4 sm:mb-8'}`}>
-        <div className={landscape ? 'flex items-baseline gap-3' : ''}>
-          <BrandLogo />
-          {!landscape && <p className="brand-sub">ROULETTE</p>}
-          <button
-            aria-label="How is this verified as fair?"
-            onClick={() => setHowItWorksOpen(true)}
-            className={`text-[11px] text-[#d6b06a]/70 underline underline-offset-2 ${landscape ? '' : 'mt-1'}`}
-          >
-            <span className="fairness-label-desktop">How is this verified as fair?</span><span className="fairness-label-mobile">Fairness</span>
-          </button>
-          {mobileGame && <button type="button" className={`mobile-history-trigger${mobileHistoryOpen ? ' open' : ''}`} aria-expanded={mobileHistoryOpen} onClick={() => setMobileHistoryOpen(!mobileHistoryOpen)}><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" /><path d="M12 7.5V12l3 2" /></svg>History</button>}
-          <button
-            type="button"
-            onClick={() => setHowItWorksOpen(true)}
-            className={`commitment-button ${landscape ? '' : 'mt-1'}`}
-            aria-label="Next lock: open the fairness details"
-            title="The lock for your next spin, shown before you bet. Tap to copy it, get a new one, or change your lucky word."
-          >
-            <span className={`commitment-status ${autoVerify ? (autoVerify.ok ? 'ok' : 'bad') : ''}`} aria-hidden="true">
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
-            </span>
-            <span className="commitment-text">
-              <span className="commitment-label">Next lock</span>
-              <code>{commitment ? commitment.serverSeedHash.slice(0, 8) : '…'}</code>
-            </span>
-            <svg className="commitment-chevron" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
-          </button>
-          <SoundQuickControls onOpen={() => setSoundSettingsOpen(true)}>{!portraitPhone && <LobbyLink />}<Inbox ready={!!user} quiet={busy || autoSpin} /></SoundQuickControls>
-          {/* Portrait phones: the toolbar row has no room (the pill would squeeze the logo), so the Lobby pill gets its own short row. */}
-          {portraitPhone && <LobbyLink className="lobby-link-row" />}
-        </div>
-        <div className="header-right">
-          <div className={`header-balance ${landscape ? 'flex items-baseline gap-2 text-right' : 'text-right'}`}>
-            <div className="balance-label-row text-xs text-[#9b98ab]">
-              <span className="balance-word">BALANCE</span>
-              <div className="mode-switch" role="group" aria-label="Real or Demo" data-testid="mode-switch" data-mode={mode}>
-                <button type="button" aria-pressed={mode === 'real'} data-testid="mode-real" className={mode === 'real' ? 'on' : ''}
-                  disabled={busy || autoSpin} aria-disabled={!modeInfo.realAvailable} title={modeInfo.realAvailable ? 'Play with real $TICS' : modeInfo.realReason}
-                  onClick={() => chooseMode('real')}>Real</button>
-                {modeInfo.demoVisible && <button type="button" aria-pressed={mode === 'demo'} data-testid="mode-demo" className={mode === 'demo' ? 'on' : ''}
-                  disabled={busy || autoSpin} title="Play with demo $TICS" onClick={() => chooseMode('demo')}>Demo</button>}
-              </div>
-              {mode === 'demo' && <button className="demo-refill" onClick={resetDemoBalance} disabled={busy || autoSpin || !user} title="Reset the demo balance and clear the table">{refilling ? '...' : 'Reset demo'}</button>}
-            </div>
-            <div className="font-bold gold-text text-xl">
-              <span data-balance-target="header" data-testid="header-balance" data-mode={mode}>{user ? (portraitPhone ? fmtShort(displayBalanceCents) : fmt(displayBalanceCents)) : '-'}</span>
-            </div>
-            {totalStaked > 0 && (
-              <div className="text-[11px] text-[#9b98ab]">{landscape ? '· ' : ''}{fmt(totalStaked)} in play</div>
-            )}
-          </div>
-          {profile ? (
-            <button type="button" className={`wallet-chip ${walletOpen ? 'open' : ''}`} data-testid="wallet-chip" aria-expanded={walletOpen} onClick={() => setWalletOpen(true)} title="Your profile">
-              <span className="wallet-chip-text">{shortAddress(profile.address)}</span><Avatar address={profile.address} size={portraitPhone ? 24 : landscape ? 20 : 28} className="wallet-chip-avatar" />
-            </button>
-          ) : (
-            <button type="button" className="wallet-connect" data-testid="wallet-connect" onClick={requestConnect} disabled={walletBusy || busy || autoSpin}>
-              {walletBusy ? 'Connecting...' : <><span className="wc-long">Connect wallet</span><span className="wc-short">Connect</span></>}
-            </button>
-          )}
-        </div>
+      <GameHeader page="roulette" layout={headerLayoutName} inert={anyModalOpen}
+        balanceText={user ? (portraitPhone ? fmtShort(displayBalanceCents) : fmt(displayBalanceCents)) : '-'} balanceNote={totalStaked > 0 ? `${fmt(totalStaked)} in play` : null}
+        mode={mode} modeInfo={modeInfo} showSwitch={!!profile} modeDisabled={busy || autoSpin} onMode={chooseMode}
+        lock={{ hash: commitment?.serverSeedHash || null, status: autoVerify ? (autoVerify.ok ? 'ok' : 'bad') : '', onTap: () => openProfile('fairness'), title: 'The lock for your next spin, shown before you bet. Tap to copy it, get a new one, or change your lucky word.' }}
+        profile={profile} profileOpen={!!sheet} onProfile={() => openProfile('wallet')} onConnect={connectFromHeader} connecting={walletBusy} connectDisabled={busy || autoSpin}>
         <GameToast onDismiss={(kind) => { if (kind === 'error') setError(null); if (kind === 'info') setNotice(null); if (kind === 'elsewhere') setElsewhere(null); }} toasts={[
           gameClosed && { kind: 'closed', className: 'game-notice', testid: 'game-closed', title: toastTitle('closed'), text: gameConfig.maintenanceMessage || 'This game is having a short break. Please check back soon.' },
           !gameClosed && tableInvalid && { kind: 'closed', className: 'game-error', testid: 'payout-table-invalid', title: 'Betting paused', text: 'The payout table from the server does not look right, so betting is paused. Please reload the page or contact support.' },
@@ -1431,7 +1448,7 @@ export default function App() {
           notice && !error && { kind: 'info', className: 'game-notice', title: toastTitle('info', notice), text: notice, dismissible: true },
           error && { kind: 'error', className: 'game-error', title: toastTitle('error', error, verificationBlocked), text: error, dismissible: !verificationBlocked },
         ].filter(Boolean)} />
-      </header>
+      </GameHeader>
 
       <AnimatePresence>
         {(revealPhase === 'totaling' || revealPhase === 'transferring') && lastResult?.totalPayoutCents > 0 && (
@@ -1442,7 +1459,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <main inert={anyModalOpen && !mobileHistoryOpen ? true : undefined}
+      <main inert={anyModalOpen ? true : undefined}
         className={`game-main max-w-[1280px] mx-auto grid noselect ${mobileGame ? 'grid-cols-1 gap-3' : 'grid-cols-[360px_minmax(0,1fr)] gap-8'}`}
       >
         <div data-testid="round-stage" data-round-stage={stageState}
@@ -1600,52 +1617,14 @@ export default function App() {
             <div className={`keyboard-hint ${landscape ? 'hidden' : 'hidden sm:block'} text-[11px] text-[#63607a]`}>Shortcuts: 1 to 8 pick a chip · Space spin · U undo · R rebet · D double · C clear</div>
           </div>
 
-          <div className={`history-panel brand-panel rounded-xl p-4 ${mobileHistoryOpen ? 'history-open' : ''}`}>
-            {mobileGame && <button className="history-close" onClick={() => setMobileHistoryOpen(false)}>Close history</button>}
-            {mobileGame && <CasinoReserve variant="compact" className="mb-3" />}
-            {mobileGame && <SupportLink className="mb-3" />}
+          {!mobileGame && <div className="history-panel brand-panel rounded-xl p-4">
             <h2 className="text-sm font-semibold text-[#9b98ab] mb-2">RECENT ROUNDS <span className="text-[11px] font-normal text-[#63607a]">· tap one for the breakdown</span></h2>
-            <div className="space-y-1 max-h-72 overflow-y-auto">
-              {history.filter((r) => r.outcome_json).map((r) => {
-                const outcome = JSON.parse(r.outcome_json);
-                const net = (r.payout_cents || 0) - r.stake_cents;
-                const col = pocketColor(outcome.pocket);
-                return (
-                  <div
-                    key={r.id}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => { setMobileHistoryOpen(false); setDetailRound(r); }}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { setMobileHistoryOpen(false); setDetailRound(r); } }}
-                    className="flex items-center gap-3 text-xs py-2 px-2.5 rounded-lg bg-black/20 hover:bg-white/5 cursor-pointer transition-colors border border-transparent hover:border-[#d6b06a]/30"
-                    title="Click for the full breakdown"
-                  >
-                    <span
-                      className={`w-7 h-7 rounded-full flex items-center justify-center text-[12px] font-bold text-white shrink-0 ${
-                        col === 'red' ? 'bg-red-700' : col === 'green' ? 'bg-emerald-600' : 'bg-zinc-800 border border-white/10'
-                      }`}
-                    >
-                      {outcome.pocket}
-                    </span>
-                    <span className="flex-1 min-w-0">
-                      <span className="text-[#ede9e1]">Round #{r.id}</span>
-                      <span className="text-[#9b98ab]"> · bet {fmt(r.stake_cents)}</span>
-                    </span>
-                    <span className={`font-bold ${net > 0 ? 'text-emerald-400' : net < 0 ? 'text-red-400' : 'text-[#9b98ab]'}`}>
-                      {net > 0 ? '+' : net < 0 ? '-' : ''}{fmt(Math.abs(net))}
-                    </span>
-                    <span className="text-[#d6b06a] text-[11px] shrink-0">details ›</span>
-                  </div>
-                );
-              })}
-              {history.length === 0 && <div className="text-xs text-[#63607a]">No rounds yet. Place a bet and spin.</div>}
-            </div>
+            {historyList}
             <p className="site-foot"><a href="/terms" target="_blank" rel="noopener">Terms</a> · 18+ only · Play at your own risk</p>
-          </div>
+          </div>}
         </div>
       </main>
 
-      <SoundSettingsDialog open={soundSettingsOpen} onClose={() => setSoundSettingsOpen(false)} />
       {tableNeedsConfirm && tableNoticeOpen && ageOk && (
         <div className="fair-backdrop" onClick={() => setTableNoticeOpen(false)}>
           <div className="fair-modal" role="dialog" aria-modal="true" aria-label="Payouts at this table" data-testid="payout-table-notice" onClick={(e) => e.stopPropagation()}>
@@ -1666,11 +1645,17 @@ export default function App() {
         </div>
       )}
       <AnimatePresence>
-        {walletOpen && profile && (
-          <WalletPanel profile={profile} wallet={user} mobile={mobileGame} deposit={deposit} onTopUp={topUp}
-            onRefresh={async () => { await Promise.all([refreshProfile(), refreshWallet()]); }}
-            onDisconnect={disconnectWallet} disconnectDisabled={busy || autoSpin} onClose={() => setWalletOpen(false)} />
-        )}
+        {sheet && <ProfileSheet key="profile" page="roulette" mobile={mobileGame} initialTab={sheet.tab} onClose={() => setSheet(null)}
+          profile={profile} wallet={user} mode={mode} balance={user ? displayBalanceCents : null}
+          onConnect={connectFromHeader} connecting={walletBusy} onDisconnect={async () => { setSheet(null); await disconnectWallet(); }} disconnectDisabled={busy || autoSpin}
+          deposit={deposit} onTopUp={topUp} onRefresh={async () => { await Promise.all([refreshProfile(), refreshWallet()]); }}
+          inbox={inbox}
+          historyContent={<div className="profile-history-wrap">{mobileGame && <CasinoReserve variant="compact" className="mb-3" />}{historyList}</div>}
+          fairnessContent={fairnessTab}
+          rows={[
+            { key: 'how', label: 'How it works', href: '/how-it-works', testid: 'profile-row-how' },
+            mode === 'demo' && { key: 'reset', label: refilling ? 'Resetting...' : 'Reset demo balance', note: 'Back to the demo start', testid: 'demo-refill', disabled: busy || autoSpin || !user || refilling, onClick: () => { setSheet(null); resetDemoBalance(); } },
+          ].filter(Boolean)} />}
       </AnimatePresence>
       {!ageOk && <AgeGate onAccept={acceptAge} />}
       {ageOk && connectNoticeOpen && <ConnectNotice onContinue={continueConnect} onClose={closeConnectNotice} />}
@@ -1692,61 +1677,7 @@ export default function App() {
       </AnimatePresence>
 
 
-      <AnimatePresence>
-        {howItWorksOpen && (
-          <motion.div className="fair-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setHowItWorksOpen(false)}>
-            <motion.div className={mobileGame ? 'fair-sheet' : 'fair-modal'} role="dialog" aria-modal="true" aria-label="How fairness works" data-testid="how-fair"
-              initial={mobileGame ? { y: '100%' } : { scale: 0.96, opacity: 0 }} animate={mobileGame ? { y: 0 } : { scale: 1, opacity: 1 }}
-              exit={mobileGame ? { y: '100%' } : { opacity: 0 }} transition={{ type: 'spring', stiffness: 420, damping: 38 }}
-              onClick={(e) => e.stopPropagation()}>
-              {mobileGame && <div className="fair-grabber" aria-hidden="true"/>}
-              <div className="fair-head"><h3>How we keep it fair</h3><button type="button" onClick={() => setHowItWorksOpen(false)} aria-label="Close">✕</button></div>
-              <FairFlow />
-              <section className="fair-panel" data-testid="next-fingerprint-box">
-                <h4>Lock for your next spin</h4>
-                <code className="fair-mono" data-testid="next-fingerprint">{commitment ? commitment.serverSeedHash : 'loading...'}</code>
-                <div className="fair-btn-row">
-                  <button type="button" className="fair-btn" disabled={!commitment} onClick={() => { navigator.clipboard?.writeText(commitment.serverSeedHash).then(() => { setLockCopied(true); setTimeout(() => setLockCopied(false), 1400); }).catch(() => {}); }}>{lockCopied ? 'Copied' : 'Copy lock'}</button>
-                  <button type="button" className="fair-btn fair-btn-ghost" data-testid="rotate-lock" disabled={busy || verifyLoading || autoSpin || verificationBlocked || !commitment || clientSeedSaving} onClick={rotateLock}>{clientSeedSaving && operationRef.current === 'rotate' ? 'Making new lock...' : 'Get a new lock'}</button>
-                </div>
-                <p className="fair-note">A new lock is made after every spin. Tap Get a new lock if you want a fresh one now.</p>
-                {retiredLock && <div className="fair-retired" data-testid="retired-lock" data-fits={retiredLock.fits ? 'yes' : 'no'}>
-                  <p>{retiredLock.fits ? 'Done. The old lock was never used, so here is its key. It fits the old lock.' : 'The old key does not fit the old lock.'}</p>
-                  <code className="fair-mono">{retiredLock.serverSeed}</code>
-                  <a className="fair-btn fair-btn-ghost" href={chefLockUrl(retiredLock.serverSeed)} target="_blank" rel="noopener noreferrer">Check the old key yourself</a>
-                </div>}
-              </section>
-              <RefusedSpins entries={readRefusedLog()} />
-              <section className="fair-panel">
-                <h4>Your lucky word</h4>
-                <p className="fair-note">Mixed into every spin together with fresh randomness from your device. Change it to anything you like.</p>
-                <div className="fair-btn-row">
-                  <input
-                    id="client-seed" name="clientSeed" autoComplete="off"
-                    value={clientSeedDraft}
-                    aria-label="Your client seed"
-                    disabled={busy || verifyLoading || autoSpin || clientSeedSaving || verificationBlocked || !commitment}
-                    onChange={(e) => setClientSeedDraft(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') saveClientSeed(); }}
-                    maxLength={64}
-                    className="fair-input"
-                  />
-                  <button
-                    type="button"
-                    className="fair-btn"
-                    onClick={saveClientSeed}
-                    disabled={busy || verifyLoading || autoSpin || verificationBlocked || !commitment || clientSeedSaving || !clientSeedDraft.trim() || clientSeedDraft.trim() === commitment?.clientSeed}
-                  >
-                    {clientSeedSaving && operationRef.current === 'seed' ? 'Saving...' : 'Save'}
-                  </button>
-                </div>
-              </section>
-              <p className="fair-foot">This proves how each spin’s number was produced. It isn’t an external audit of the casino.</p>
-              <button type="button" className="fair-close" onClick={() => setHowItWorksOpen(false)}>Got it</button>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {inbox.popupNode}
     </div>
   );
 }

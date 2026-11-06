@@ -3,7 +3,7 @@
 // Per viewport (phone portrait, phone landscape, desktop): the 18+ gate shows once and not again, the page
 // never scrolls, both game cards and their Play buttons are inside the viewport without overlapping, Play on
 // Gods of Power lands on /godsofpower (no gate again), Play on Roulette loads the felt, and both game headers
-// carry a Lobby pill that leads back to /. Screenshots under QA_OUT, default <tmp>/lobby-qa.
+// carry the shared header's Lobby pill that leads back to /. Screenshots under QA_OUT, default <tmp>/lobby-qa.
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict'), os = require('node:os');
 const APP_URL = process.env.APP_URL || 'http://127.0.0.1:8789', CDP_URL = process.env.CDP_URL || 'http://localhost:9354';
 const OUT = process.env.QA_OUT || path.join(process.env.TMPDIR || os.tmpdir(), 'lobby-qa'); fs.mkdirSync(OUT, { recursive: true });
@@ -118,7 +118,7 @@ const VIEWPORTS = [[390, 844, 'portrait', 'phone portrait'], [844, 390, 'landsca
     await x.waitFor('location.pathname === "/roulette" && !!document.querySelector("[data-testid=\\"header-balance\\"]") && /Next lock[^a-f0-9]*[a-f0-9]{8}/.test(document.body.innerText)', 'roulette page');
     assert.equal(await x.ev('!!document.querySelector("[data-testid=\\"age-gate\\"]")'), false, `${label}: no gate on roulette after the lobby`);
     const pill = await x.ev(`(()=>{const a=document.querySelector('[data-testid="lobby-link"]');if(!a)return null;const r=a.getBoundingClientRect();const hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);
-      const others=['.brand-logo img','.commitment-button','.mobile-history-trigger','[data-testid="header-balance"]','[data-testid="wallet-connect"]','[data-testid="mode-switch"]','.demo-refill','.sound-toolbar > button','[data-testid="inbox-bell"]'].flatMap(s=>[...document.querySelectorAll(s)]).map(e=>{const o=e.getBoundingClientRect();const ix=Math.min(r.right,o.right)-Math.max(r.x,o.x),iy=Math.min(r.bottom,o.bottom)-Math.max(r.y,o.y);return ix>1&&iy>1?e.className||e.tagName:null}).filter(Boolean);
+      const others=['.brand-logo img','.commitment-button','[data-testid="header-balance"]','[data-testid="wallet-connect"]','[data-testid="profile-button"]','[data-testid="mode-switch"]','[data-testid="header-mute"]'].flatMap(s=>[...document.querySelectorAll(s)]).map(e=>{const o=e.getBoundingClientRect();const ix=Math.min(r.right,o.right)-Math.max(r.x,o.x),iy=Math.min(r.bottom,o.bottom)-Math.max(r.y,o.y);return ix>1&&iy>1?e.className||e.tagName:null}).filter(Boolean);
       const header=document.querySelector('header').getBoundingClientRect();
       return {x:r.x,y:r.y,r:r.right,b:r.bottom,w:r.width,h:r.height,href:a.getAttribute('href'),tappable:!!hit&&a.contains(hit),others,inHeader:r.y>=header.y-0.5&&r.bottom<=header.bottom+0.5,headerH:Math.round(header.height),scrollHeight:document.scrollingElement.scrollHeight}})()`);
     assert.ok(pill, `${label}: roulette Lobby pill present`);

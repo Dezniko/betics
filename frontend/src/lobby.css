@@ -15,41 +15,10 @@ body:has(.lobby) { height: 100dvh; min-height: 0; overflow: hidden; overscroll-b
 .lobby.layout-desktop { gap: 16px; padding: 18px 28px 16px; }
 .lobby.layout-landscape { gap: 6px; padding: calc(4px + env(safe-area-inset-top, 0px)) max(10px, env(safe-area-inset-right, 0px)) calc(4px + env(safe-area-inset-bottom, 0px)) max(10px, env(safe-area-inset-left, 0px)); }
 
-/* ---- header: same family as the games ---- */
-.lobby-header { position: relative; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; max-width: 1180px; margin: 0 auto; min-width: 0; }
-.lobby-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.lobby.casino-app .lobby-brand .brand-logo img { height: 36px; margin: 0; }
-.lobby .brand-beta { top: 0; right: -2px; transform: none; padding: 2px 4px 1px; font-size: 6px; letter-spacing: .1em; box-shadow: 0 0 6px rgba(130, 80, 255, 0.35); }
-.lobby-sub { display: none; margin: 0; }
-.lobby-brand .sound-toolbar { margin: 0; }
-.lobby-brand .sound-toolbar > button { width: 28px; height: 26px; }
-.lobby-header-right { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-.lobby-balance { text-align: right; }
-.lobby-balance-row { display: flex; align-items: center; justify-content: flex-end; gap: 6px; font-size: 8px; line-height: 12px; color: var(--bx-mute); }
-.lobby-balance .mode-switch > button { min-width: 34px; padding: 0 6px; font-size: 10px; line-height: 16px; }
-.lobby-balance-amount { font-size: 18px; line-height: 22px; font-weight: 800; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.lobby-header .wallet-connect, .lobby-header .wallet-chip { min-height: 30px; padding: 0 9px; font-size: 11px; border-radius: 9px; }
-.lobby-header .wallet-chip { padding: 0 3px 0 9px; gap: 6px; }
-.layout-portrait .lobby-header-right { flex-direction: column; align-items: flex-end; gap: 4px; flex: 0 1 auto; min-width: 0; max-width: 60%; }
-.layout-portrait .lobby-balance-amount { max-width: 100%; overflow: hidden; }
-.layout-portrait .lobby-balance-amount .long { font-size: 15px; }
-.layout-portrait .wc-long { display: none; } .layout-portrait .wc-short { display: inline; }
-.lobby.layout-landscape .lobby-brand .brand-logo img { height: 30px; }
-.layout-landscape .lobby-balance { display: flex; align-items: baseline; gap: 8px; }
-.layout-landscape .lobby-balance-amount { font-size: 16px; }
-.layout-desktop .lobby-brand { gap: 14px; }
-.lobby.layout-desktop .lobby-brand .brand-logo img { height: 64px; }
-.lobby.layout-desktop .brand-beta { font-size: 7px; right: -4px; }
-.layout-desktop .lobby-sub { display: block; }
-.layout-desktop .lobby-brand .sound-toolbar > button { width: 32px; height: 30px; }
-.layout-desktop .lobby-balance-row { font-size: 9px; }
-.layout-desktop .lobby-balance-amount { font-size: 24px; line-height: 28px; }
-.layout-desktop .lobby-header .wallet-connect, .layout-desktop .lobby-header .wallet-chip { min-height: 38px; padding: 0 14px; font-size: 13px; }
-.layout-desktop .lobby-header .wallet-chip { padding: 0 4px 0 14px; }
-.lobby-header .game-toasts { top: calc(100% + 6px); }
+/* ---- header: the shared GameHeader (gameHeader.css), 1100px wide like the main column ---- */
 
 /* ---- main ---- */
-.lobby-main { flex: 1 1 0; min-height: 0; min-width: 0; width: 100%; max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+.lobby-main { flex: 1 1 0; min-height: 0; min-width: 0; width: 100%; max-width: 1100px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
 .layout-desktop .lobby-main { gap: 14px; }
 .layout-landscape .lobby-main { gap: 6px; }
 .lobby-welcome { flex: 0 0 auto; margin: 0; text-align: center; font-size: 13px; line-height: 1.35; color: #cfcbdb; }

@@ -93,7 +93,6 @@ html {
 .closeup-overlay { position: absolute; inset: 0; display: flex; align-items: center; }
 .chip-rail { padding: 10px 2px 2px; flex-wrap: wrap; }
 /* Mobile is a single fitted game surface, not a scrolling document. */
-.fairness-label-mobile { display: none; }
 .round-result-panel { background: #102b23 !important; }
 .transfer-panel { background: #17141f; }
 .mobile-game {
@@ -102,17 +101,6 @@ html {
   padding: calc(6px + env(safe-area-inset-top, 0px)) max(6px, env(safe-area-inset-right, 0px)) calc(6px + env(safe-area-inset-bottom, 0px)) max(6px, env(safe-area-inset-left, 0px));
 }
 body:has(.mobile-game) { height: 100dvh; min-height: 0; overflow: hidden; overscroll-behavior: none; }
-.mobile-game header { width: 100%; flex: 0 0 auto; margin-bottom: 0; gap: 8px; }
-.mobile-game header > div:first-child { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 0 7px; min-width: 0; }
-.mobile-game header h1 { font-size: 15px; line-height: 21px; white-space: nowrap; }
-.mobile-game header p, .mobile-game .fairness-label-desktop { display: none; }
-.mobile-game .fairness-label-mobile { display: inline; }
-.mobile-game header button { margin-top: 0; font-size: 10px; line-height: 19px; white-space: nowrap; }
-.mobile-game header .commitment-button { grid-column: 1 / -1; font-size: 9px; line-height: 14px; }
-.mobile-game header > .header-right { flex-shrink: 0; }
-.mobile-game .header-balance > div:first-child { font-size: 8px; line-height: 10px; }
-.mobile-game .header-balance .gold-text { font-size: 19px; line-height: 23px; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.mobile-game:not(.phone-landscape) .header-balance > div:last-child:not(.gold-text) { display: none; }
 .mobile-game .game-main {
   flex: 1 1 0; width: 100%; min-height: 0; min-width: 0; position: relative;
   grid-template-columns: minmax(0, 1fr);
@@ -185,16 +173,11 @@ body:has(.mobile-game) { height: 100dvh; min-height: 0; overflow: hidden; oversc
 .mobile-game .game-notice { position: absolute; z-index: 65; top: 60px; right: 8px; left: 8px; margin: 0; padding: 8px; background: #2a2410; font-size: 11px; }
 .mobile-game .game-error { position: absolute; z-index: 65; top: 60px; right: 8px; left: 8px; margin: 0; padding: 8px; background: #541b22; font-size: 11px; }
 .mobile-game .history-panel { display: none; }
-.mobile-game .history-panel.history-open { display: block; position: fixed; z-index: 60; inset: calc(50px + env(safe-area-inset-top,0px)) max(8px,env(safe-area-inset-right,0px)) calc(8px + env(safe-area-inset-bottom,0px)) max(8px,env(safe-area-inset-left,0px)); background: #0e0e15; overflow-y: auto; }
-.mobile-game .history-panel.history-open > div { max-height: none; }
-.history-close { color: #edce79; font-size: 12px; min-height: 36px; float: right; }
 .phone-landscape .game-main {
   grid-template-columns: minmax(150px, 34%) minmax(0, 1fr);
   grid-template-rows: 26px minmax(0, 1fr) auto;
   grid-template-areas: 'wheel recent' 'wheel table' 'wheel controls';
 }
-.phone-landscape .header-balance { display: flex; align-items: baseline; gap: 5px; }
-.phone-landscape .header-balance > div:last-child:not(.gold-text) { font-size: 9px; }
 .phone-landscape .mobile-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(294px, 1fr); align-items: center; gap: 7px; }
 .phone-landscape .mobile-controls .tray-balances { display: none; }
 .phone-landscape .mobile-controls .bet-actions > button { min-height: 42px; }
@@ -243,35 +226,21 @@ body:has(.mobile-game) { height: 100dvh; min-height: 0; overflow: hidden; oversc
 .transfer-chip-lane { width: 64px; height: 26px; overflow: hidden; position: relative; }
 .transfer-chip-lane > span { position: absolute; inset: 0; display: grid; place-items: center; font-size: 22px; color: #a69765; }
 .transfer-chip-lane > div { position: absolute; left: 0; top: 3px; }
-.demo-refill { margin-left: 4px; padding: 2px 5px; border: 1px solid #a38b42; border-radius: 5px; color: #efd58a; background: #211c13; font-size: 9px; line-height: 14px; white-space: nowrap; touch-action: manipulation; }
-.demo-refill:disabled { opacity: .4; }
-.sound-toolbar { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; vertical-align: middle; }
-.sound-toolbar > button { display: grid; place-items: center; width: 32px; height: 30px; border: 1px solid #3a3428; border-radius: 7px; background: #111119; color: #e7cb85; touch-action: manipulation; }
-.mobile-game header > div:first-child { gap: 0 5px; }
-.mobile-game header h1 { font-size: 14px; overflow: hidden; text-overflow: ellipsis; }
-.mobile-game header .commitment-button { grid-column: 1 / 3; min-width: 0; }
-.mobile-game header .commitment-button > span:last-child { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.mobile-game .sound-toolbar { grid-column: 3; grid-row: 2; margin: 0; justify-self: end; gap: 2px; }
-.mobile-game .sound-toolbar > button { width: 27px; height: 28px; }
-.sound-backdrop { position: fixed; z-index: 80; inset: 0; display: flex; align-items: center; justify-content: center; padding: max(12px, env(safe-area-inset-top,0px)) max(12px, env(safe-area-inset-right,0px)) max(12px, env(safe-area-inset-bottom,0px)) max(12px, env(safe-area-inset-left,0px)); background: #060609d0; }
-.sound-dialog { width: min(100%, 360px); max-height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 16px; border-radius: 16px; border: 1px solid #a89256; background: #111119; color: #ede9e1; display: flex; flex-direction: column; gap: 14px; }
-.sound-dialog-heading { display: flex; align-items: center; justify-content: space-between; }
-.sound-dialog h3 { font-size: 19px; font-weight: 700; color: #edd18a; }
-.sound-dialog-heading button { width: 40px; height: 40px; background: #24242f; border-radius: 8px; }
 .mute-switch { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; background: #24242f; border: 1px solid #3f382c; border-radius: 8px; font-size: 12px; }
 .volume-label { display: flex; justify-content: space-between; font-size: 13px; }
-.sound-dialog input[type='range'] { width: 100%; height: 36px; accent-color: #d6b06a; touch-action: pan-x; }
-.sound-dialog legend { font-size: 12px; margin-bottom: 8px; }
+.sound-panel input[type='range'] { width: 100%; height: 36px; accent-color: #d6b06a; touch-action: pan-x; }
+.sound-panel legend { font-size: 12px; margin-bottom: 8px; }
 .dealer-choices { display: flex; gap: 8px; }
 .dealer-choices label { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; white-space: nowrap; min-height: 44px; border: 1px solid #3a3a48; border-radius: 8px; font-size: 14px; }
 .dealer-choices label.selected { border-color: #d6b06a; background: #352c1c; }
 .dealer-choices input { accent-color: #d6b06a; }
 .voice-preview { min-height: 42px; border-radius: 8px; background: #d6b06a; color: #100d06; font-size: 13px; font-weight: 700; }
 .voice-preview:disabled { opacity: .45; }
-.sound-dialog small { font-size: 10px; line-height: 1.5; color: #aaa6b8; }
+.sound-panel small { font-size: 10px; line-height: 1.5; color: #aaa6b8; }
+.sound-panel { display: flex; flex-direction: column; gap: 12px; }
 .casino-app .fixed [class*='overflow-y-auto'] { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y pinch-zoom; }
 @media (max-width: 760px) { .phone-landscape .mobile-controls { display: flex; gap: 3px; } .phone-landscape .chip-balance-row, .phone-landscape .bet-actions { width: 100%; } .phone-landscape .chip-rail { width: 100%; justify-content: space-evenly; padding-top: 1px; } .phone-landscape .denom-button { height: 30px; } .phone-landscape .bet-actions > button { min-height: 36px; padding: 4px 0; } }
-@media (orientation: landscape) and (max-height: 480px) { .sound-dialog { gap: 8px; padding: 10px 14px; } .sound-dialog-heading button { height: 30px; width: 34px; } .sound-dialog-heading h3 { font-size: 16px; } .mute-switch, .dealer-choices label { min-height: 34px; } .sound-dialog input[type='range'] { height: 25px; } .voice-preview { min-height: 32px; } }
+@media (orientation: landscape) and (max-height: 480px) { .sound-panel { gap: 8px; } .mute-switch, .dealer-choices label { min-height: 34px; } .sound-panel input[type='range'] { height: 25px; } .voice-preview { min-height: 32px; } }
 
 /* ---- Win celebration (transform/opacity only; see WinCelebration.jsx) ---- */
 .win-celebration { position: fixed; inset: 0; z-index: 80; overflow: hidden; contain: layout paint; cursor: pointer; -webkit-tap-highlight-color: transparent; }
@@ -460,8 +429,6 @@ body:has(.mobile-game) { height: 100dvh; min-height: 0; overflow: hidden; oversc
 .fair-retired p { margin: 0; color: #c9f2d8; font-size: 13px; }
 
 /* Messages from the casino (admin panel): bell, popup and inbox. */
-.inbox-bell { position: relative; }
-.inbox-dot { position: absolute; top: -5px; right: -5px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: #d33a3a; color: #fff; font-size: 10px; line-height: 16px; font-weight: 700; }
 .inbox-overlay { position: fixed; inset: 0; z-index: 400; background: rgba(5, 4, 8, .72); display: grid; place-items: center; padding: 16px; animation: inbox-in .2s ease-out; }
 @keyframes inbox-in { from { opacity: 0; } }
 .inbox-card { background: #111119; border: 1px solid #3a3428; border-radius: 16px; padding: 20px; width: min(360px, 100%); color: #ece8e0; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
@@ -478,32 +445,8 @@ body:has(.mobile-game) { height: 100dvh; min-height: 0; overflow: hidden; oversc
 .inbox-remove { align-self: flex-end; background: none; border: 0; color: #9b98ab; font-size: 12px; cursor: pointer; }
 .inbox-empty { color: #9b98ab; text-align: center; padding: 20px 0; }
 
-/* Wallet: header button, Real / Demo switch, profile panel, 18+ gate, terms page. */
-.header-right { display: flex; align-items: center; gap: 14px; min-width: 0; }
-.balance-label-row { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
-.mode-switch { display: inline-flex; padding: 2px; border: 1px solid #3a3428; border-radius: 8px; background: #0c0c12; }
-.mode-switch > button { min-width: 44px; padding: 2px 9px; border-radius: 6px; color: #aaa6b8; font-size: 11px; font-weight: 700; line-height: 18px; letter-spacing: .02em; touch-action: manipulation; }
-.mode-switch > button.on { background: #d6b06a; color: #0e0e15; }
-.mode-switch > button[aria-disabled='true']:not(.on) { color: #66637a; text-decoration: line-through; text-decoration-color: #66637a99; }
-.mode-switch > button:disabled { opacity: .6; }
-.wallet-connect, .wallet-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; border-radius: 10px; font-size: 13px; font-weight: 700; white-space: nowrap; touch-action: manipulation; }
-.wallet-connect { background: #d6b06a; color: #0e0e15; border: 1px solid #ecd08e; box-shadow: 0 2px 0 #8a6a1c; }
-.wallet-connect:disabled { opacity: .5; }
-.wallet-chip { background: #111119; color: #efd58a; border: 1px solid #a38b42; font-family: ui-monospace, Menlo, monospace; }
+/* Wallet: profile panel content, 18+ gate, terms page. */
 .wallet-dot { width: 7px; height: 7px; border-radius: 50%; background: #34d399; flex-shrink: 0; }
-.mobile-game .header-right { gap: 6px; }
-.mobile-game .mode-switch > button { min-width: 36px; padding: 0 6px; font-size: 10px; line-height: 17px; }
-.mobile-game .wallet-connect, .mobile-game .wallet-chip { min-height: 30px; padding: 0 8px; font-size: 11px; border-radius: 8px; }
-.mobile-game .balance-label-row { gap: 4px; }
-.phone-portrait .header-right { display: grid; grid-template-columns: auto auto; grid-template-areas: 'switch bal' 'reset wallet'; gap: 3px 5px; justify-items: end; align-items: center; }
-.phone-portrait .header-balance, .phone-portrait .balance-label-row { display: contents; }
-.phone-portrait .balance-word { display: none; }
-.phone-portrait .mode-switch { grid-area: switch; }
-.phone-portrait .demo-refill { grid-area: reset; margin: 0; }
-.phone-portrait .header-balance .gold-text { grid-area: bal; font-size: 16px; line-height: 20px; }
-.phone-portrait .header-right > .wallet-connect, .phone-portrait .header-right > .wallet-chip { grid-area: wallet; min-height: 26px; font-size: 10px; }
-.phone-landscape .balance-word { display: none; }
-.phone-landscape .header-balance > div:first-child { order: 0; }
 .wallet-panel .wallet-section { gap: 8px; }
 .wallet-mono { flex: 1; min-width: 0; font-family: ui-monospace, Menlo, monospace; font-size: 12px; word-break: break-all; color: #ede9e1; }
 .wallet-lines { display: grid; gap: 4px; margin: 0; }
@@ -532,25 +475,6 @@ body:has(.mobile-game) { height: 100dvh; min-height: 0; overflow: hidden; oversc
 .terms-page p { margin: 6px 0; color: #d3cfdb; }
 .terms-page code { font-family: ui-monospace, Menlo, monospace; font-size: 13px; word-break: break-all; color: #fff; }
 .terms-back { color: #ecd08e; text-decoration: underline; font-size: 14px; }
-.phone-portrait header > div:first-child .commitment-button { grid-column: 1 / 2; }
-.phone-portrait header > div:first-child .sound-toolbar { grid-column: 2 / 4; }
-.phone-portrait .mode-switch > button { min-width: 0; padding: 0 6px; }
-.phone-portrait header h1 { overflow: visible; text-overflow: clip; }
-@media (max-width: 370px) {
-  .phone-portrait .header-balance .gold-text { font-size: 14px; }
-  .phone-portrait .mode-switch > button { padding: 0 4px; font-size: 9px; }
-  .phone-portrait .demo-refill { padding: 1px 4px; font-size: 8px; }
-  .phone-portrait .header-right > .wallet-connect, .phone-portrait .header-right > .wallet-chip { padding: 0 6px; font-size: 9px; }
-  .phone-portrait header > div:first-child { gap: 0 4px; }
-  .phone-portrait header h1 { font-size: 13px; }
-}
-.wc-short { display: none; }
-@media (max-width: 370px) { .phone-portrait .wc-long { display: none; } .phone-portrait .wc-short { display: inline; } }
-@media (max-width: 400px) {
-  .phone-portrait .header-right { grid-template-areas: 'bal bal' 'switch switch' 'reset wallet'; gap: 2px 4px; }
-  .phone-portrait .header-balance .gold-text { line-height: 17px; }
-  .phone-portrait .mode-switch > button { line-height: 15px; }
-}
 
 
 /* ================= qu-BETICS brand layer ================= */
@@ -563,12 +487,8 @@ body:has(.mobile-game) { height: 100dvh; min-height: 0; overflow: hidden; oversc
   background: rgba(14, 14, 21, 0.85); border: 1px solid rgba(214, 176, 106, 0.7);
   box-shadow: 0 0 10px rgba(130, 80, 255, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06); pointer-events: none; user-select: none; }
 /* Phones: the logo is small and the Fairness button sits a few px to its right, so the pill stays inside the logo box. */
-.mobile-game .brand-beta { top: 0; right: 0; transform: none; padding: 2px 4px 1px; font-size: 6px; letter-spacing: .1em; box-shadow: 0 0 6px rgba(130, 80, 255, 0.35); }
 .brand-logo img { display: block; height: 64px; width: auto; max-width: none; filter: drop-shadow(0 6px 18px rgba(120, 70, 255, 0.28)); -webkit-user-drag: none; }
-.phone-landscape .brand-logo img { height: 30px; }
-.mobile-game .brand-logo img { height: 30px; }
 .brand-sub { margin-top: 4px; font-family: var(--bx-display); font-size: 9.5px; letter-spacing: .32em; color: var(--bx-mute); }
-.mobile-game header h1.brand-logo { overflow: visible; line-height: 0; }
 
 /* Panels: dark glass with a chrome hairline and a soft top highlight */
 .brand-panel {
@@ -600,25 +520,6 @@ body:has(.mobile-game) { height: 100dvh; min-height: 0; overflow: hidden; oversc
 .mobile-controls .bet-actions > button.brand-spin { font-size: 10.5px; letter-spacing: .1em; }
 
 /* Header: wallet button, Real/Demo switch, balance */
-.wallet-connect { background: var(--bx-neon); color: #fff; border: 1px solid rgba(255, 255, 255, 0.28); box-shadow: 0 0 16px rgba(130, 80, 255, 0.45), inset 0 1px 0 rgba(255,255,255,.3); text-shadow: 0 1px 2px rgba(0,0,0,.3); }
-.wallet-chip { background: linear-gradient(180deg, #1b1b26, #111119); color: var(--bx-gold-hi); border: 1px solid rgba(214, 176, 106, 0.5); }
-.wallet-dot { background: var(--bx-cyan); box-shadow: 0 0 8px var(--bx-cyan); }
-.mode-switch { background: #0b0b11; border: 1px solid var(--bx-line-strong); }
-.mode-switch > button { color: var(--bx-mute); }
-.mode-switch > button.on { background: var(--bx-neon); color: #fff; box-shadow: 0 0 10px rgba(130, 80, 255, 0.5); }
-.demo-refill { border-color: var(--bx-line-strong); background: #12121a; color: var(--bx-gold-hi); }
-.balance-word { font-family: var(--bx-display); font-size: 9px; letter-spacing: .22em; }
-.header-balance .gold-text { font-variant-numeric: tabular-nums; letter-spacing: .01em; }
-.sound-toolbar > button { background: linear-gradient(180deg, #1a1a24, #111118); border-color: var(--bx-line-strong); color: var(--bx-gold-hi); }
-.commitment-button code { color: var(--bx-gold) !important; }
-/* Lobby pill (both games): sits in the sound toolbar row, same family as the lock pill. */
-.lobby-link { display: inline-flex; align-items: center; gap: 5px; min-height: 30px; padding: 0 10px; border-radius: 999px; border: 1px solid rgba(214, 176, 106, 0.45);
-  background: linear-gradient(180deg, #1a1a24, #111118); color: var(--bx-gold-hi); font-family: var(--bx-display); font-size: 9px; letter-spacing: .12em; text-transform: uppercase; text-decoration: none; white-space: nowrap; touch-action: manipulation;
-  transition: border-color .15s ease, box-shadow .15s ease; }
-@media (hover: hover) { .lobby-link:hover { border-color: rgba(150, 120, 255, 0.6); box-shadow: 0 0 12px rgba(120, 90, 255, 0.3); } }
-.sound-toolbar > .lobby-link { margin-right: 2px; }
-.mobile-game .sound-toolbar > .lobby-link { min-height: 28px; padding: 0 7px; font-size: 7.5px; gap: 4px; }
-.phone-portrait header > div:first-child .lobby-link-row { grid-column: 1 / -1; grid-row: 3; justify-self: start; margin-top: 3px; min-height: 22px; padding: 0 8px; font-size: 7.5px; gap: 4px; }
 
 /* Chips: the selected denomination gets the neon ring */
 .denom-button[data-selected='true'] { filter: drop-shadow(0 0 8px rgba(130, 90, 255, 0.55)); }
@@ -689,8 +590,7 @@ body:has(.mobile-game) { height: 100dvh; min-height: 0; overflow: hidden; oversc
 .fair-input { background: #08080c; border-color: var(--bx-line-strong); }
 .fair-input:focus { outline: none; border-color: rgba(150, 110, 255, 0.8); box-shadow: 0 0 0 3px rgba(130, 90, 255, 0.2); }
 .fair-diy h4 b, .fair-find li::before { background: var(--bx-neon); color: #fff; }
-.sound-dialog, .inbox-card, .inbox-panel { background: linear-gradient(180deg, #14141c, #0c0c11); border-color: var(--bx-line-strong); }
-.sound-dialog h3, .inbox-card h3, .inbox-head h2 { color: var(--bx-gold-hi); }
+.inbox-card, .inbox-panel { background: linear-gradient(180deg, #14141c, #0c0c11); border-color: var(--bx-line-strong); }
 .wallet-lines dd { color: var(--bx-text); }
 .age-gate-backdrop { background: radial-gradient(ellipse at 50% 30%, rgba(60, 20, 110, 0.55), rgba(0, 0, 0, 0.92) 70%); backdrop-filter: blur(3px); }
 .age-gate { text-align: left; }
@@ -701,24 +601,13 @@ body:has(.mobile-game) { height: 100dvh; min-height: 0; overflow: hidden; oversc
 .terms-page h2 { color: var(--bx-gold-hi); font-family: var(--bx-display); font-weight: 400; font-size: 13px; letter-spacing: .12em; text-transform: uppercase; }
 .terms-logo { display: block; width: min(320px, 80%); height: auto; margin: 18px 0 4px; }
 .history-panel h2 { font-family: var(--bx-display); font-weight: 400; font-size: 11px !important; letter-spacing: .2em; }
-.casino-app:not(.mobile-game) .brand-logo img { height: 84px; margin-left: -4px; }
-.casino-app:not(.mobile-game) .brand-sub { margin-top: 2px; font-size: 9px; letter-spacing: .3em; }
-.phone-portrait .brand-logo img { height: 33px; }
 .history-panel h2 > span { font-family: 'Inter', sans-serif; letter-spacing: 0; }
 .casino-app:not(.mobile-game) .table-help { margin-top: 2px; }
 .age-gate .fair-head { justify-content: center; }
 .age-gate .fair-head h3 { font-size: 14px; }
 .age-gate > .fair-note { text-align: center; }
 
-/* ---- Player profile: header pill + drop-down card (desktop) / sheet (phones) ---- */
-.wallet-chip { gap: 9px; padding: 0 4px 0 14px; border-radius: 14px; min-height: 40px;
-  background: linear-gradient(180deg, #1d1b27, #12111a); border: 1.5px solid rgba(214,176,106,.75); color: var(--bx-gold-hi, #f1dcaa);
-  box-shadow: 4px 5px 0 rgba(166,60,255,.55), 0 0 18px rgba(34,211,255,.10); transition: transform .12s ease, box-shadow .12s ease; }
-.wallet-chip:hover { transform: translate(-1px, -1px); box-shadow: 5px 6px 0 rgba(166,60,255,.65), 0 0 22px rgba(34,211,255,.18); }
-.wallet-chip:active { transform: translate(2px, 3px); box-shadow: 1px 1px 0 rgba(166,60,255,.6); }
-.wallet-chip .wallet-chip-avatar { flex: none; border-radius: 50%; box-shadow: 0 0 0 2px #0b0a10, 0 0 0 3px rgba(214,176,106,.7); }
-.mobile-game .wallet-chip { padding: 0 3px 0 9px; gap: 6px; border-radius: 11px; min-height: 30px; box-shadow: 3px 3px 0 rgba(166,60,255,.55); }
-.phone-portrait .header-right > .wallet-chip { padding: 0 2px 0 7px; box-shadow: 2px 2px 0 rgba(166,60,255,.55); }
+/* ---- Player profile: drop-down card (desktop) / sheet (phones), see ProfileSheet.jsx ---- */
 
 .profile-backdrop { background: rgba(4,4,8,.45) !important; backdrop-filter: blur(2px); align-items: flex-start !important; justify-content: flex-end !important; }
 .profile-panel { display: flex; flex-direction: column; color: var(--bx-text, #ede9e1); }
@@ -743,22 +632,9 @@ body:has(.mobile-game) { height: 100dvh; min-height: 0; overflow: hidden; oversc
   border: 1.5px solid rgba(214,176,106,.75); box-shadow: 7px 8px 0 rgba(166,60,255,.45), 0 24px 60px rgba(0,0,0,.6); }
 .profile-panel.fair-modal:not(.profile-dropdown) .profile-body { padding: 16px; border-radius: 18px; background: linear-gradient(180deg, #15141d, #0d0c13); border: 1.5px solid rgba(214,176,106,.75); box-shadow: 7px 8px 0 rgba(166,60,255,.45); }
 
-/* balance card */
-.profile-card { display: grid; justify-items: center; gap: 8px; padding: 16px 14px 14px; border-radius: 16px; text-align: center;
-  background: radial-gradient(120% 120% at 0% 0%, rgba(166,60,255,.28), transparent 55%), radial-gradient(120% 120% at 100% 100%, rgba(34,211,255,.18), transparent 55%), #1a1824;
-  border: 1px solid rgba(241,220,170,.22); box-shadow: inset 0 1px 0 rgba(255,255,255,.06); }
-.profile-eyebrow { margin: 0; font: 400 11px/1.2 Michroma, Inter, sans-serif; letter-spacing: .2em; text-transform: uppercase; color: var(--bx-gold, #d6b06a); }
-.profile-card-balance { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; }
-.profile-card-balance strong { font-size: 28px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.1;
-  background: linear-gradient(180deg, #fbefcf, #e2bf76 55%, #b98f45); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .profile-avatar { flex: none; border-radius: 50%; box-shadow: 0 0 0 3px #0b0a10, 0 0 0 4.5px rgba(214,176,106,.8), 0 0 22px rgba(166,60,255,.5); }
-.profile-card-address { font-size: 11.5px; color: #d9d5e3; overflow-wrap: anywhere; letter-spacing: 0; }
-.profile-card-actions { display: flex; gap: 8px; }
 .profile-mini { display: inline-flex; align-items: center; min-height: 28px; padding: 0 12px; border-radius: 999px; font-size: 12px; font-weight: 700; color: #f1dcaa; background: rgba(0,0,0,.35); border: 1px solid rgba(214,176,106,.4); text-decoration: none; }
 .profile-mini:hover { border-color: rgba(241,220,170,.85); color: #fff; }
-.profile-meta { margin: 2px 0 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
-.profile-meta > span { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; background: rgba(0,0,0,.35); border: 1px solid rgba(255,255,255,.08); font-size: 11px; line-height: 1.2; color: var(--bx-mute, #9b98ab); }
-.profile-online { color: #8fe9ff !important; font-weight: 700; }
 
 /* value rows, like a statement */
 .profile-rows { margin: 0; display: grid; }
@@ -788,16 +664,8 @@ body:has(.mobile-game) { height: 100dvh; min-height: 0; overflow: hidden; oversc
   background: linear-gradient(135deg, #a63cff, #4a5cff 55%, #22d3ff); box-shadow: 2px 3px 0 rgba(0,0,0,.6); }
 .profile-email-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 22px; }
 
-.profile-logout-row { display: flex; justify-content: center; padding-top: 2px; }
-.profile-logout { min-width: 150px; min-height: 42px; padding: 0 22px; border-radius: 12px; font: 400 12px/1 Michroma, Inter, sans-serif; letter-spacing: .12em; text-transform: uppercase; color: #ffe9e9;
-  background: linear-gradient(180deg, #3a1520, #22101a); border: 1.5px solid rgba(255,107,129,.6); box-shadow: 4px 5px 0 rgba(0,0,0,.65); transition: transform .12s ease, box-shadow .12s ease; }
-.profile-logout:hover { border-color: #ff6b81; color: #fff; }
-.profile-logout:active { transform: translate(2px, 3px); box-shadow: 1px 1px 0 rgba(0,0,0,.65); }
-.profile-logout:disabled { opacity: .5; }
 .profile-panel .fair-foot { margin: 0; text-align: center; }
 @media (max-width: 420px) {
-  .profile-card-balance strong { font-size: 23px; }
-  .profile-card-address { font-size: 10.5px; }
   .profile-rows dt, .profile-rows dd { font-size: 14px; }
   .profile-tabs button { font-size: 12px; min-height: 34px; }
 }
@@ -840,17 +708,6 @@ body:has(.mobile-game) { height: 100dvh; min-height: 0; overflow: hidden; oversc
 .mobile-game .game-toast-message { font-size: 12px; line-height: 1.3; }
 .mobile-game .game-toast-close { width: 26px; height: 26px; }
 
-/* logo never shrinks under the Fairness / History links */
-.mobile-game:not(.phone-portrait) header > div:first-child { grid-template-columns: max-content auto auto; justify-content: start; }
-.mobile-game:not(.phone-portrait) header h1.brand-logo { min-width: max-content; }
-.profile-card { gap: 6px; padding: 14px 14px 12px; }
-.profile-meta { margin-top: 0; }
-/* portrait phones: the logo scales down to its column instead of sliding under Fairness / History */
-.phone-portrait header h1.brand-logo { min-width: 0; overflow: hidden; }
-.phone-portrait .brand-logo img { height: auto; width: auto; max-height: 33px; max-width: 100%; }
-/* portrait phones: the profile button is just the avatar, which leaves the logo its full size */
-.phone-portrait .header-right > .wallet-chip { padding: 2px; gap: 0; border-radius: 999px; min-height: 0; }
-.phone-portrait .header-right > .wallet-chip .wallet-chip-text { display: none; }
 
 /* casino wallet (top up) */
 .casino-wallet-card { display: grid; gap: 8px; padding: 12px; border-radius: 12px; background: linear-gradient(180deg, rgba(214,176,106,.10), rgba(0,0,0,.25)); border: 1px solid rgba(214,176,106,.45); }
@@ -876,13 +733,6 @@ body:has(.mobile-game) { height: 100dvh; min-height: 0; overflow: hidden; oversc
 .commitment-label { font-weight: 700; color: #ede9e1; }
 .commitment-button code { font-size: 11px; color: var(--bx-gold-hi, #f1dcaa) !important; overflow: hidden; text-overflow: ellipsis; }
 .commitment-chevron { flex: none; color: var(--bx-gold, #d6b06a); }
-.mobile-game header .commitment-button { min-height: 24px; padding: 2px 7px 2px 3px; font-size: 10px !important; }
-.mobile-game header .commitment-button > span:last-child { overflow: visible; }
-.mobile-game .commitment-status { width: 18px; height: 18px; }
-.mobile-game .commitment-button code { font-size: 10px; }
-.phone-portrait .commitment-chevron { display: none; }
-.phone-portrait header .commitment-button { gap: 4px; padding-right: 8px; }
-.phone-portrait .commitment-button code { max-width: 5ch; text-overflow: clip; }
 
 /* ---- Casino reserve: on-chain balance of the casino wallet ---- */
 .casino-reserve { width: 100%; display: grid; gap: 6px; padding: 14px 16px; border-radius: 14px; position: relative; overflow: hidden;
@@ -905,7 +755,6 @@ body:has(.mobile-game) { height: 100dvh; min-height: 0; overflow: hidden; oversc
 .casino-reserve-compact { padding: 10px 12px; gap: 4px; border-radius: 12px; }
 .casino-reserve-compact .casino-reserve-amount { font-size: 19px; }
 .casino-reserve-compact .casino-reserve-lines { font-size: 11.5px; }
-.casino-app:not(.mobile-game) header .commitment-button { margin-left: 10px; }
 
 /* profile: support on Telegram */
 .profile-support { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; text-decoration: none; color: #ede9e1;
@@ -931,11 +780,6 @@ body:has(.mobile-game) { height: 100dvh; min-height: 0; overflow: hidden; oversc
 .how-live a { font-size: 13px; color: #8fe9ff !important; }
 .how-support { margin-top: 8px; max-width: 420px; }
 
-/* History: a clear tappable pill (phones) */
-.mobile-history-trigger { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; line-height: 1.3; letter-spacing: .02em;
-  color: #ecd08e; background: linear-gradient(180deg, rgba(214,176,106,.16), rgba(214,176,106,.05)); border: 1px solid rgba(214,176,106,.55); box-shadow: 0 0 10px rgba(214,176,106,.12); cursor: pointer; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
-.mobile-history-trigger:active, .mobile-history-trigger.open { background: rgba(214,176,106,.26); border-color: #e2c27e; color: #fff3d6; }
-.mobile-history-trigger svg { flex: none; }
 
 /* Casino reserve head: the badge never leaves the card */
 .casino-reserve-head { flex-wrap: wrap; row-gap: 6px; }

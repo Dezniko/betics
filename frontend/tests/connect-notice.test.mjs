@@ -35,7 +35,8 @@ test('copy is exactly what Dez approved: no emoji, no dashes', () => {
 
 test('App: Connect wallet opens the notice first when it was not accepted yet', () => {
   const app = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8');
-  assert.match(app, /onClick=\{requestConnect\}/);
+  assert.match(app, /onConnect=\{connectFromHeader\}/, 'the header profile pill connects');
+  assert.match(app, /const connectFromHeader = \(\) => \{ setSheet\(null\); requestConnect\(\); \};/);
   assert.match(app, /const requestConnect = \(\) => \{[^}]*needsConnectNotice\(\)/);
   assert.match(app, /<ConnectNotice /);
 });

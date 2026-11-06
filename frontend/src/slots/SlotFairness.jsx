@@ -5,7 +5,8 @@ import { fairnessCopy } from './slotCopy.js';
 
 // The fairness sheet of the last round, in the same shape as the roulette one: three tiles
 // (Locked > You spin > Opened), one sentence, a verdict, and a 'Check it yourself' dropdown with the
-// codes and Copy buttons. Plain words, no emoji, no long dashes.
+// codes and Copy buttons. Plain words, no emoji, no long dashes. `SlotFairnessBody` is the content
+// alone (the profile sheet's Fairness tab shows it), `SlotFairness` the modal the Fairness button opens.
 const LockIcon = ({ open }) => <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
   <rect x="4.5" y="10.5" width="15" height="10" rx="2" />{open ? <path d="M8 10.5V7a4 4 0 0 1 7.6-1.7" /> : <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" />}<circle cx="12" cy="15.5" r="1.4" fill="currentColor" />
 </svg>;
@@ -24,15 +25,10 @@ function useCopy() {
 }
 
 // round: the last spin reply; receipt: the pre-bet receipt; verdict: { ok, problems } from verifySlotRound.
-export default function SlotFairness({ round, receipt, verdict, mobile, onClose }) {
+export function SlotFairnessBody({ round, receipt, verdict, idPrefix = 'slot' }) {
   const c = fairnessCopy();
   const [diy, setDiy] = useState(false);
   const [copied, copy] = useCopy();
-  useEffect(() => lockBackgroundScroll(true), []);
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
   const f = round?.fairness;
   const ok = !!round && !!verdict?.ok;
   const status = !round ? 'none' : ok ? 'verified' : 'mismatch';
@@ -48,6 +44,47 @@ export default function SlotFairness({ round, receipt, verdict, mobile, onClose 
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `gods-of-power-round-${round?.roundId || 'last'}.json`; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   };
+  return <div className="slot-fairness-body" data-testid={`${idPrefix}-fairness-body`} data-status={status}>
+    <div className={`fair-verdict fair-${status === 'none' ? 'loading' : status}`} data-testid={`${idPrefix}-fair-verdict`}>
+      <span className="fair-verdict-icon">{ok ? '✓' : status === 'none' ? '' : '!'}</span>
+      <div><strong>{status === 'none' ? c.noRound : ok ? c.fairVerdict : c.badVerdict}</strong>
+        {status === 'mismatch' && <p>{c.badNote}</p>}</div>
+    </div>
+    {status === 'mismatch' && <ul className="fair-note slot-fair-problems" data-testid={`${idPrefix}-fair-problems`}>{(verdict?.problems || []).map((p) => <li key={p}>{p}</li>)}</ul>}
+    <div className="fair-picture" data-testid="fair-picture">
+      <div className={`fair-tile ${states[0] ? 'ok' : 'bad'}`}><span className="fair-icon"><LockIcon /></span><b>{c.locked[0]}</b><small>{c.locked[1]}</small></div>
+      <span className="fair-arrow" aria-hidden="true">›</span>
+      <div className={`fair-tile ${states[1] ? 'ok' : 'bad'}`}><span className="fair-icon"><SpinIcon /></span><b>{c.spin[0]}</b><small>{c.spin[1]}</small></div>
+      <span className="fair-arrow" aria-hidden="true">›</span>
+      <div className={`fair-tile ${states[2] ? 'ok' : 'bad'}`}><span className="fair-icon">{round ? <DoorIcon /> : <LockIcon open />}</span><b>{c.opened[0]}</b><small>{round ? c.opened[1] : 'after the spin'}</small></div>
+    </div>
+    {ok && <p className="fair-one-line">{c.sentence}</p>}
+    {round && f && <div className={`fair-drop${diy ? ' open' : ''}`}>
+      <button type="button" className="fair-drop-btn" data-testid="drop-diy" aria-expanded={diy} onClick={() => setDiy((v) => !v)}><span>{c.check}</span><Chevron open={diy} /></button>
+      {diy && <div className="fair-drop-body" data-testid={`${idPrefix}-fair-diy`}>
+        <p className="fair-note">{c.checkNote}</p>
+        <Code id="key" label={c.keyLabel} value={f.serverSeed} />
+        <Code id="lock" label={c.lockLabel} value={f.serverSeedHash} />
+        <Code id="lucky" label={c.luckyLabel} value={f.clientSeed} />
+        <Code id="nonce" label={c.nonceLabel} value={f.nonce} />
+        <Code id="stops" label={c.stopsLabel} value={stops} />
+        <div className="fair-btn-row">
+          <a className="fair-btn fair-btn-ghost" href="/verify-slots.mjs" download="verify-slots.mjs">{c.verifier}</a>
+          <button type="button" className="fair-btn fair-btn-ghost" onClick={downloadProof}>{c.roundData}</button>
+        </div>
+      </div>}
+    </div>}
+  </div>;
+}
+
+export default function SlotFairness({ round, receipt, verdict, mobile, onClose }) {
+  const c = fairnessCopy();
+  useEffect(() => lockBackgroundScroll(true), []);
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  const status = !round ? 'none' : verdict?.ok ? 'verified' : 'mismatch';
   const Wrapper = mobile ? 'fair-sheet' : 'fair-modal';
   return <motion.div className="fair-backdrop slot-sheet-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
     <motion.div className={`${Wrapper} slot-sheet slot-fairness`} role="dialog" aria-modal="true" aria-label="Fairness check" data-testid="slot-fairness" data-status={status}
@@ -55,35 +92,7 @@ export default function SlotFairness({ round, receipt, verdict, mobile, onClose 
       exit={mobile ? { y: '100%' } : { opacity: 0 }} transition={{ type: 'spring', stiffness: 420, damping: 38 }} onClick={(e) => e.stopPropagation()}>
       {mobile && <div className="fair-grabber" aria-hidden="true" />}
       <div className="fair-head"><h3>{c.title}</h3><button type="button" onClick={onClose} aria-label="Close">✕</button></div>
-      <div className={`fair-verdict fair-${status === 'none' ? 'loading' : status}`} data-testid="slot-fair-verdict">
-        <span className="fair-verdict-icon">{ok ? '✓' : status === 'none' ? '' : '!'}</span>
-        <div><strong>{status === 'none' ? c.noRound : ok ? c.fairVerdict : c.badVerdict}</strong>
-          {status === 'mismatch' && <p>{c.badNote}</p>}</div>
-      </div>
-      {status === 'mismatch' && <ul className="fair-note slot-fair-problems" data-testid="slot-fair-problems">{(verdict?.problems || []).map((p) => <li key={p}>{p}</li>)}</ul>}
-      <div className="fair-picture" data-testid="fair-picture">
-        <div className={`fair-tile ${states[0] ? 'ok' : 'bad'}`}><span className="fair-icon"><LockIcon /></span><b>{c.locked[0]}</b><small>{c.locked[1]}</small></div>
-        <span className="fair-arrow" aria-hidden="true">›</span>
-        <div className={`fair-tile ${states[1] ? 'ok' : 'bad'}`}><span className="fair-icon"><SpinIcon /></span><b>{c.spin[0]}</b><small>{c.spin[1]}</small></div>
-        <span className="fair-arrow" aria-hidden="true">›</span>
-        <div className={`fair-tile ${states[2] ? 'ok' : 'bad'}`}><span className="fair-icon">{round ? <DoorIcon /> : <LockIcon open />}</span><b>{c.opened[0]}</b><small>{round ? c.opened[1] : 'after the spin'}</small></div>
-      </div>
-      {ok && <p className="fair-one-line">{c.sentence}</p>}
-      {round && f && <div className={`fair-drop${diy ? ' open' : ''}`}>
-        <button type="button" className="fair-drop-btn" data-testid="drop-diy" aria-expanded={diy} onClick={() => setDiy((v) => !v)}><span>{c.check}</span><Chevron open={diy} /></button>
-        {diy && <div className="fair-drop-body" data-testid="slot-fair-diy">
-          <p className="fair-note">{c.checkNote}</p>
-          <Code id="key" label={c.keyLabel} value={f.serverSeed} />
-          <Code id="lock" label={c.lockLabel} value={f.serverSeedHash} />
-          <Code id="lucky" label={c.luckyLabel} value={f.clientSeed} />
-          <Code id="nonce" label={c.nonceLabel} value={f.nonce} />
-          <Code id="stops" label={c.stopsLabel} value={stops} />
-          <div className="fair-btn-row">
-            <a className="fair-btn fair-btn-ghost" href="/verify-slots.mjs" download="verify-slots.mjs">{c.verifier}</a>
-            <button type="button" className="fair-btn fair-btn-ghost" onClick={downloadProof}>{c.roundData}</button>
-          </div>
-        </div>}
-      </div>}
+      <SlotFairnessBody round={round} receipt={receipt} verdict={verdict} />
       <button type="button" className="fair-close" onClick={onClose}>{c.close}</button>
     </motion.div>
   </motion.div>;
