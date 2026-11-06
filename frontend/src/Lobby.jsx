@@ -127,7 +127,8 @@ export default function Lobby() {
         inbox={inbox}
         historyContent={<div className="profile-guest-wallet"><p className="fair-note">Your recent rounds are listed inside each game: open Roulette or Gods of Power and tap your profile.</p></div>}
         fairnessContent={<div className="profile-guest-wallet"><p className="fair-note">Every round is locked before you bet and opened after it. Each game shows its lock and lets you check any round in your browser.</p><a className="fair-btn fair-btn-ghost" href="/how-it-works">How it works</a></div>}
-        rows={[{ key: 'how', label: 'How it works', href: '/how-it-works', testid: 'profile-row-how' }]} />}
+        rows={[{ key: 'how', label: 'How it works', href: '/how-it-works', testid: 'profile-row-how' }]}
+        onResetDemo={() => session.resetDemoBalance().catch(() => {})} resetting={session.demoResetting} />}
     </AnimatePresence>
     {inbox.popupNode}
     {!session.ageOk && <AgeGate onAccept={session.acceptAge} />}

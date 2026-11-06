@@ -37,6 +37,7 @@ export default function ProfileSheet({
   onConnect, connecting = false, onDisconnect, disconnectDisabled = false,
   deposit = null, onTopUp, onRefresh,
   historyContent = null, fairnessContent = null, rows = [], inbox = null,
+  onResetDemo = null, resetDisabled = false, resetting = false, // staging play-money reset, shown in Demo on every page
 }) {
   const connected = !!profile?.address;
   const [tab, setTab] = useState(MAIN_TABS.some(([k]) => k === initialTab) ? initialTab : 'wallet');
@@ -72,6 +73,8 @@ export default function ProfileSheet({
     { key: 'sound', label: 'Sound', note: soundSummary, testid: 'profile-sound', expand: <SoundSettingsPanel /> },
     inbox && { key: 'messages', label: 'Messages', note: inbox.unseen > 0 ? `${inbox.unseen} new` : inbox.messages.length ? `${inbox.messages.length}` : 'None', testid: 'profile-messages', expand: <InboxList inbox={inbox} />, onExpand: inbox.markSeen },
     ...rows,
+    onResetDemo && wallet && mode === 'demo' && { key: 'reset', label: resetting ? 'Resetting...' : 'Reset demo balance', note: 'Back to the demo start', testid: 'demo-refill', disabled: resetting || resetDisabled,
+      onClick: () => { onClose(); onResetDemo(); } },
     connected && { key: 'disconnect', label: disconnecting ? 'Disconnecting...' : 'Disconnect', testid: 'wallet-disconnect', danger: true, disabled: disconnecting || disconnectDisabled,
       onClick: async () => { setDisconnecting(true); try { await onDisconnect(); } finally { setDisconnecting(false); } } },
   ].filter(Boolean);

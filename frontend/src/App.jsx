@@ -1654,10 +1654,8 @@ export default function App() {
           inbox={inbox}
           historyContent={<div className="profile-history-wrap">{mobileGame && <CasinoReserve variant="compact" className="mb-3" />}{historyList}</div>}
           fairnessContent={fairnessTab}
-          rows={[
-            { key: 'how', label: 'How it works', href: '/how-it-works', testid: 'profile-row-how' },
-            mode === 'demo' && { key: 'reset', label: refilling ? 'Resetting...' : 'Reset demo balance', note: 'Back to the demo start', testid: 'demo-refill', disabled: busy || autoSpin || !user || refilling, onClick: () => { setSheet(null); resetDemoBalance(); } },
-          ].filter(Boolean)} />}
+          rows={[{ key: 'how', label: 'How it works', href: '/how-it-works', testid: 'profile-row-how' }]}
+          onResetDemo={resetDemoBalance} resetDisabled={busy || autoSpin || !user} resetting={refilling} />}
       </AnimatePresence>
       {!ageOk && <AgeGate onAccept={acceptAge} />}
       {ageOk && connectNoticeOpen && <ConnectNotice onContinue={continueConnect} onClose={closeConnectNotice} />}

@@ -108,7 +108,20 @@ export default function useSession({ busy = false } = {}) {
     setUser((u) => (u ? { ...u, [m === 'real' ? 'realTicsCents' : 'balanceCents']: cents } : u));
   }, []);
 
+  // Staging only play-money reset (the server answers 404 on live). Shared by every page's profile sheet.
+  const [demoResetting, setDemoResetting] = useState(false);
+  const resetDemoBalance = useCallback(async () => {
+    setDemoResetting(true);
+    try {
+      const response = await fetch('/api/demo/reset-balance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'Demo balance could not be reset.');
+      setUser((u) => (u ? { ...u, ...result } : u));
+      return result;
+    } finally { setDemoResetting(false); }
+  }, []);
+
   return { user, profile, identity, tabId, mode, modeInfo, balance, ageOk, acceptAge, walletBusy, connectNoticeOpen, requestConnect, continueConnect, closeConnectNotice,
-    disconnectWallet, refreshWallet, refreshProfile, chooseMode, applyBalance, signedOutElsewhere, sessionError: error, clearSessionError: () => setError(null),
+    disconnectWallet, refreshWallet, refreshProfile, chooseMode, applyBalance, resetDemoBalance, demoResetting, signedOutElsewhere, sessionError: error, clearSessionError: () => setError(null),
     elsewhere, clearElsewhere: () => setElsewhere(null) };
 }

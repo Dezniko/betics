@@ -454,7 +454,8 @@ export default function SlotsApp() {
         fairnessContent={<div className="profile-fairness"><SlotFairnessBody round={lastRound} receipt={lastReceipt} verdict={lastVerdict} idPrefix="profile" />
           <section className="fair-panel"><h4>{C.nextLock}</h4><code className="fair-mono" data-testid="next-fingerprint">{commitment ? commitment.serverSeedHash : '...'}</code>
             <p className="fair-note">Shown before you bet. After the spin the key that opens it is revealed, so you can check the reels yourself.</p></section></div>}
-        rows={[{ key: 'pays', label: 'Rules and pays', testid: 'profile-row-pays', onClick: () => { setSheet(null); setPaytableOpen(true); } }]} />}
+        rows={[{ key: 'pays', label: 'Rules and pays', testid: 'profile-row-pays', onClick: () => { setSheet(null); setPaytableOpen(true); } }]}
+        onResetDemo={() => session.resetDemoBalance().catch((e) => setError(e.message))} resetDisabled={busy || autoSpin} resetting={session.demoResetting} />}
     </AnimatePresence>
     {inbox.popupNode}
     <AnimatePresence>{paytableOpen && <SlotPaytable stake={bet} mobile={mobile} onClose={() => setPaytableOpen(false)} />}</AnimatePresence>

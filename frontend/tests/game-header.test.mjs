@@ -90,8 +90,8 @@ test('lobby, roulette and Gods of Power render GameHeader and ProfileSheet with 
   }
   const app = src('App.jsx');
   assert.match(app, /balanceText=\{user \? \(portraitPhone \? fmtShort\(displayBalanceCents\) : fmt\(displayBalanceCents\)\) : '-'\}/, 'roulette keeps the count-up balance in the header');
-  assert.match(app, /key: 'reset', label: refilling \? 'Resetting\.\.\.' : 'Reset demo balance'/, 'Reset demo lives in the sheet');
-  assert.match(app, /mode === 'demo' && \{ key: 'reset'/, 'only in Demo');
+  assert.match(src('ProfileSheet.jsx'), /onResetDemo && wallet && mode === 'demo' && \{ key: 'reset'/, 'Reset demo is a built in sheet row, shown in Demo on every page');
+  for (const f of ['App.jsx', 'slots/SlotsApp.jsx', 'Lobby.jsx']) assert.match(src(f), /onResetDemo=\{/, `${f} passes onResetDemo`);
   assert.match(app, /onTap: \(\) => openProfile\('fairness'\)/, 'the roulette lock pill opens the Fairness tab');
   assert.match(app, /data-testid="how-fair"/, 'the How we keep it fair content stays reachable');
   assert.match(app, /data-testid="rotate-lock"/);
