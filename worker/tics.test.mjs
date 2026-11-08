@@ -1963,3 +1963,9 @@ test('F2/F3: unmatched and uncredited-assigned deposits are owed; no scan cursor
     assert.equal(await reserveSpinExposure(p.env.DB, { id: randomUUID(), playerId: 'x', units: 100, now: later }), false, 'no exposure can be booked');
   } finally { p.restore(); }
 });
+
+test('outgoingUnits: a node answer that is not a list is an error (falls back), never "nothing left the wallet"', async () => {
+  const { outgoingUnits } = await import('./tics.js');
+  await assert.rejects(outgoingUnits(async () => null, OFFICIAL_TICS, CASINO, 1, 5), /no list/);
+  assert.equal(await outgoingUnits(async () => [], OFFICIAL_TICS.toUpperCase(), CASINO.toUpperCase(), 1, 5), 0);
+});

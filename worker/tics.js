@@ -138,12 +138,14 @@ export function transferLogsFilter(token, to, fromBlock, toBlock) {
 // Asked in small block ranges (some node plans allow 10 blocks per log query).
 export const OUTGOING_LOG_CHUNK = 10;
 export async function outgoingUnits(rpc, token, from, fromBlock, toBlock, chunk = OUTGOING_LOG_CHUNK) {
+  token = String(token).toLowerCase(); from = String(from).toLowerCase();
   if (toBlock < fromBlock) return 0;
   const logs = [];
   for (let a = fromBlock; a <= toBlock; a += chunk) {
     const b = Math.min(toBlock, a + chunk - 1);
     const part = await rpc('eth_getLogs', [{ address: token, topics: [TRANSFER_TOPIC, pad32(from)], fromBlock: `0x${a.toString(16)}`, toBlock: `0x${b.toString(16)}` }]);
-    for (const log of part || []) logs.push(log);
+    if (!Array.isArray(part)) throw new Error('eth_getLogs returned no list'); // a malformed answer must not read as "nothing left the wallet"
+    for (const log of part) logs.push(log);
   }
   let wei = 0n;
   for (const log of logs) {
