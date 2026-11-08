@@ -219,6 +219,7 @@ async function sentSinceUnits(db, snapshotAt) {
 export async function liveFloat(db, settings, now = Date.now()) {
   const snapshot = await readFloat(db, now);
   if (!snapshot || now - snapshot.at > FLOAT_MAX_AGE_MS || !Number.isSafeInteger(snapshot.tokenUnits) || !settings.casinoWallet) return null;
+  if (snapshot.wallet !== settings.casinoWallet || (Number.isSafeInteger(settings.chainId) && snapshot.chainId !== settings.chainId)) return null; // a snapshot of another wallet or chain says nothing here
   const [owed, held, sent] = await Promise.all([owedUnits(db), openHolds(db, now), sentSinceUnits(db, snapshot.at)]);
   const tokenUnits = Math.max(0, snapshot.tokenUnits - sent); // what the wallet still holds
   // What the casino may treat as its own: money the deposit scan has already classified (prelaunch audit P1,
@@ -299,7 +300,7 @@ export async function publicReserve(db, settings, straightMultiplier = 36, now =
 // owed to someone until an owner assigns them to a player (then the player balance carries them) or marks them as
 // the house's own funding. Uses the index chain_deposits_status.
 export const UNRESOLVED_DEPOSITS_SQL = `(SELECT COALESCE(SUM(amount_units), 0) FROM chain_deposits
-      WHERE reversed_at IS NULL AND (status IN ('unmatched', 'below_min') OR (status = 'assigned' AND credited_at IS NULL)))`;
+      WHERE reversed_at IS NULL AND (status IN ('unmatched', 'below_min') OR (status IN ('credited', 'assigned') AND credited_at IS NULL)))`;
 export const OWED_SQL = `(SELECT COALESCE(SUM(real_tics_cents), 0) FROM players WHERE real_tics_cents > 0)
       + (SELECT COALESCE(SUM(amount_units), 0) FROM chain_withdrawals WHERE kind = 'player' AND status IN ('holding','queued','signing','sending','blocked','cancelling'))
       + (SELECT COALESCE(SUM(amount_units), 0) FROM chain_withdrawals WHERE kind = 'treasury' AND status IN ('queued','signing','sending'))
@@ -322,7 +323,8 @@ export { raise as raiseAlert };
 // credits that failed. It is never above the latest balance (payouts that left meanwhile) and, when the node cannot answer, it can only stay the same or fall, never rise.
 export async function safeTokenReading(db, settings, rpc, latestUnits, previous = null) {
   // Only a reading of this same wallet on this same chain can cap the new one.
-  const prior = Number.isSafeInteger(previous?.safeTokenUnits) && previous.wallet === settings.casinoWallet && previous.chainId === settings.chainId ? previous.safeTokenUnits : null;
+  const prior = Number.isSafeInteger(previous?.safeTokenUnits) && previous.wallet === settings.casinoWallet && previous.chainId === settings.chainId
+    && Number.isSafeInteger(previous.at) && Date.now() - previous.at <= FLOAT_MAX_AGE_MS ? previous.safeTokenUnits : null; // an old reading says nothing about today's wallet
   // No usable classification and no earlier protected reading of this wallet: nothing may be treated as the
   // casino's own (security review F3). With an earlier reading, the new one can only stay the same or fall.
   const conservative = (block = null) => (prior === null ? { units: 0, block, unknown: true } : { units: Math.min(latestUnits, prior), block });

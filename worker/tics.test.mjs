@@ -1935,6 +1935,9 @@ test('F2/F3: unmatched and uncredited-assigned deposits are owed; no scan cursor
     assert.equal((await owedUnits(p.env.DB)), 70000);
     p.DB.raw.prepare("UPDATE chain_deposits SET credited_at = datetime('now') WHERE from_address = '0x1111111111111111111111111111111111111111'").run();
     assert.equal((await owedUnits(p.env.DB)), 50000, 'the player balance would carry it once the wallet credits it');
+    // Recorded as credited but the wallet never confirmed the credit: still owed, whatever its age.
+    p.DB.raw.prepare("UPDATE chain_deposits SET status = 'credited', credited_at = NULL, created_at = datetime('now', '-30 days') WHERE from_address = '0x1111111111111111111111111111111111111111'").run();
+    assert.equal((await owedUnits(p.env.DB)), 70000, 'an unconfirmed credit is customer money');
     // House funding marked by the owner: not owed.
     p.DB.raw.prepare("UPDATE chain_deposits SET status = 'ignored', resolution = 'house_funding', credited_at = NULL, player_id = NULL WHERE from_address = '0x1111111111111111111111111111111111111111'").run();
     assert.equal((await owedUnits(p.env.DB)), 50000);
@@ -1946,7 +1949,9 @@ test('F2/F3: unmatched and uncredited-assigned deposits are owed; no scan cursor
     const failing = await safeTokenReading(p.env.DB, settings, async () => { throw new Error('node down'); }, live, null);
     assert.deepEqual([failing.units, failing.unknown], [0, true]);
     // With an earlier reading of this wallet the fallback can only stay the same or fall.
-    const withPrior = await safeTokenReading(p.env.DB, settings, async () => { throw new Error('node down'); }, live, { safeTokenUnits: 1234, wallet: settings.casinoWallet, chainId: settings.chainId });
+    const withPrior = await safeTokenReading(p.env.DB, settings, async () => { throw new Error('node down'); }, live, { at: Date.now(), safeTokenUnits: 1234, wallet: settings.casinoWallet, chainId: settings.chainId });
+    const stale = await safeTokenReading(p.env.DB, settings, async () => { throw new Error('node down'); }, live, { at: Date.now() - 3_600_000, safeTokenUnits: 1234, wallet: settings.casinoWallet, chainId: settings.chainId });
+    assert.deepEqual([stale.units, stale.unknown], [0, true], 'an hour old reading does not count');
     assert.deepEqual([withPrior.units, withPrior.unknown], [Math.min(live, 1234), undefined]);
     // And a snapshot built from an unknown reading gives no free float and books no exposure.
     p.DB.raw.prepare("DELETE FROM chain_state WHERE key = 'float'").run();
