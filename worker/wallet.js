@@ -8,7 +8,7 @@ import { recoverMessageAddress, createPublicClient, http } from 'viem';
 import { sha256 } from './platform.js';
 import {
   ticsSettings, saveTicsSettings, DEFAULT_TICS, normAddress, checksum, isTxHash, weiToUnits, formatTics, rpcClient, rpcUrl,
-  hexToNumber, decodeTransfers, transferLogsFilter, tokenBalance, confirmationsFor,
+  hexToNumber, decodeTransfers, transferLogsFilter, tokenBalance, outgoingUnits, confirmationsFor,
 } from './tics.js';
 
 export const WALLET_COOKIE = '__Host-betics_wallet';
@@ -17,6 +17,9 @@ const NONCE_MINUTES = 5;
 // Alchemy's free plan allows eth_getLogs over at most 10 blocks per call.
 const LOG_CHUNK = 10;
 const FLOAT_MAX_AGE_MS = 10 * 60 * 1000;
+// A deposit scan more than this many blocks behind the chain (about an hour) cannot classify today's wallet:
+// the protected reading then falls back (earlier fresh reading or 0) instead of trusting the raw balance.
+export const MAX_CLASSIFY_LAG_BLOCKS = 300;
 const HOLDINGS_EVERY_MS = 10 * 60 * 1000;
 // Alchemy budget: holdings are only looked up for wallets that have made a credited deposit (they are
 // only shown in the admin player profile), and the whole site makes at most this many lookups per UTC day,
@@ -337,11 +340,18 @@ export async function safeTokenReading(db, settings, rpc, latestUnits, previous 
     else return conservative(); // no scan has run for this wallet yet: nothing is classified
     if (!(block > 0)) return conservative();
     const atBlock = weiToUnits(await tokenBalance(rpc, settings.token, settings.casinoWallet, block));
+    // Everything the wallet SENT since that block (payouts, treasury, moves by hand) has left; without this an
+    // unscanned customer deposit refilling the wallet would read as the house money that was already spent
+    // (security review R1). Read from the chain over the same token, wallet and block interval. A scan that is
+    // absurdly far behind, or a failed log read, means the reading cannot be trusted: fall back (0 or the earlier
+    // fresh reading), never to the raw balance.
+    if (latest - block > MAX_CLASSIFY_LAG_BLOCKS) return conservative(block);
+    const outgoingAfter = await outgoingUnits(rpc, settings.token, settings.casinoWallet, block + 1, latest);
     const row = await db.prepare(`SELECT
         COALESCE(SUM(CASE WHEN status IN ('credited', 'assigned') AND credited_at IS NOT NULL AND block_number > ?2 THEN amount_units END), 0) AS credited_after,
         COALESCE(SUM(CASE WHEN status IN ('credited', 'assigned') AND credited_at IS NULL AND block_number <= ?2 THEN amount_units END), 0) AS uncredited_before
       FROM chain_deposits WHERE chain_id = ?1 AND status IN ('credited', 'assigned') AND reversed_at IS NULL AND created_at >= datetime('now', '-7 days')`).bind(settings.chainId, block).first();
-    const units = Math.max(0, atBlock + (row?.credited_after || 0) - (row?.uncredited_before || 0));
+    const units = Math.max(0, atBlock + (row?.credited_after || 0) - (row?.uncredited_before || 0) - outgoingAfter);
     return { units: Math.min(latestUnits, units), block };
   } catch (error) {
     console.error('safe balance reading failed, keeping the lower of the last readings', error?.message || error);

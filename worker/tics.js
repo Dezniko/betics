@@ -133,6 +133,28 @@ export function decodeTransfers(logs, token, to) {
 export function transferLogsFilter(token, to, fromBlock, toBlock) {
   return { address: token, topics: [TRANSFER_TOPIC, null, pad32(to)], fromBlock: `0x${fromBlock.toString(16)}`, toBlock: `0x${toBlock.toString(16)}` };
 }
+// Tokens the casino wallet SENT between two blocks (payouts, treasury sends, anything moved by hand), as whole units.
+// Read from the chain so the protected balance does not depend on our own records of what left (security review R1).
+// Asked in small block ranges (some node plans allow 10 blocks per log query).
+export const OUTGOING_LOG_CHUNK = 10;
+export async function outgoingUnits(rpc, token, from, fromBlock, toBlock, chunk = OUTGOING_LOG_CHUNK) {
+  if (toBlock < fromBlock) return 0;
+  const logs = [];
+  for (let a = fromBlock; a <= toBlock; a += chunk) {
+    const b = Math.min(toBlock, a + chunk - 1);
+    const part = await rpc('eth_getLogs', [{ address: token, topics: [TRANSFER_TOPIC, pad32(from)], fromBlock: `0x${a.toString(16)}`, toBlock: `0x${b.toString(16)}` }]);
+    for (const log of part || []) logs.push(log);
+  }
+  let wei = 0n;
+  for (const log of logs) {
+    if (log.removed) continue;
+    if (String(log.address).toLowerCase() !== token) continue;
+    if (!log.topics || log.topics[0] !== TRANSFER_TOPIC || log.topics.length !== 3) continue;
+    if (String(log.topics[1]).toLowerCase() !== pad32(from)) continue;
+    wei += BigInt(log.data);
+  }
+  return weiToUnits(wei);
+}
 export async function tokenBalance(rpc, token, owner, block = 'latest') {
   const data = encodeFunctionData({ abi: ERC20_ABI, functionName: 'balanceOf', args: [owner] });
   const tag = Number.isSafeInteger(block) ? `0x${block.toString(16)}` : block;

@@ -24,12 +24,27 @@ function doStorage() {
 
 // Fake Ethereum node that really checks signatures, sender, nonce, token, recipient and amount.
 function fakeChain(casino) {
-  const c = { chainId: 1, block: 2000, nonce: 0, token: 10n ** 24n, eth: 10n ** 18n, baseFee: 1_000_000_000n, gasEstimate: 50_000n, mempool: new Map(), receipts: new Map(), sent: [], reject: null, mineOnSend: true, noTransferLog: false };
+  const c = { outLogs: [], inflows: [], chainId: 1, block: 2000, nonce: 0, token: 10n ** 24n, eth: 10n ** 18n, baseFee: 1_000_000_000n, gasEstimate: 50_000n, mempool: new Map(), receipts: new Map(), sent: [], reject: null, mineOnSend: true, noTransferLog: false };
   c.rpc = async (method, params) => {
     switch (method) {
       case 'eth_chainId': return `0x${c.chainId.toString(16)}`;
       case 'eth_blockNumber': return `0x${c.block.toString(16)}`;
-      case 'eth_call': return `0x${c.token.toString(16).padStart(64, '0')}`;
+      case 'eth_getLogs': {
+        const f = params[0], from = Number(f.fromBlock), to = Number(f.toBlock);
+        if (to - from + 1 > 10) throw new Error('Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range.');
+        return c.outLogs.filter((l) => Number(l.blockNumber) >= from && Number(l.blockNumber) <= to && l.address === f.address
+          && (f.topics[1] == null || l.topics[1] === f.topics[1]) && (f.topics[2] == null || l.topics[2] === f.topics[2]));
+      }
+      case 'eth_call': { // balanceOf at a block: today's balance, minus inflows and plus outflows that came after that block
+        const tag = params[1];
+        let bal = c.token;
+        if (tag && tag !== 'latest') {
+          const at = Number(tag);
+          for (const l of c.outLogs) if (Number(l.blockNumber) > at) bal += BigInt(l.data);
+          for (const d of c.inflows) if (d.block > at) bal -= d.wei;
+        }
+        return `0x${bal.toString(16).padStart(64, '0')}`;
+      }
       case 'eth_getBalance': return `0x${c.eth.toString(16)}`;
       case 'eth_getTransactionCount': return `0x${(params[1] === 'pending' ? c.nonce + c.mempool.size : c.nonce).toString(16)}`;
       case 'eth_getBlockByNumber': return { baseFeePerGas: `0x${c.baseFee.toString(16)}` };
@@ -55,6 +70,8 @@ function fakeChain(casino) {
       default: throw new Error(`unexpected ${method}`);
     }
   };
+  // A customer deposit landing now (not yet scanned): raises today's balance, recorded with its block for historical reads.
+  c.deposit = (wei) => { c.block++; c.inflows.push({ wei, block: c.block }); c.token += wei; };
   c.mine = (hash, status = '0x1') => {
     const tx = c.mempool.get(hash); c.mempool.delete(hash);
     assert.equal(tx.nonce, c.nonce, 'nonces are used in order');
@@ -64,6 +81,7 @@ function fakeChain(casino) {
     const logs = status === '0x1' && !c.noTransferLog ? [{ address: OFFICIAL_TICS, topics: [TRANSFER_TOPIC, pad(casino), pad(args[0])], data: `0x${args[1].toString(16).padStart(64, '0')}`,
       transactionHash: hash, logIndex: '0x0', blockNumber: `0x${c.block.toString(16)}` }] : [];
     c.receipts.set(hash, { status, blockNumber: `0x${c.block.toString(16)}`, transactionHash: hash, logs });
+    for (const l of logs) c.outLogs.push(l); // visible to eth_getLogs (outgoing transfers of the casino wallet)
     if (status === '0x1') c.token -= args[1];
   };
   return c;
@@ -1242,4 +1260,35 @@ test('F1/F3: a wallet whose deposits are not classified yet has nothing free for
   // Marked as the house's own funding by the owner: free again. Assigned and credited to a player: owed through the balance instead.
   s.DB.raw.prepare("UPDATE chain_deposits SET status = 'ignored', resolution = 'house_funding', resolved_at = datetime('now'), resolved_by = 'owner' WHERE tx_hash = ?").run(tx);
   assert.equal((await s.call('/status')).data.owedUnits, 60000, 'the treasury send in flight is owed, the house funding is not');
+});
+
+// Security review R1: house money sent out, then a customer deposit the scan has not seen yet refills the wallet.
+// The protected reading must not count the refill as the house money that already left.
+import { liveFloat, refreshFloat } from '../worker/wallet.js';
+test('R1: after a treasury send, an unscanned customer deposit that refills the wallet is not free for the treasury or the table', async () => {
+  const s = await setup(), units = 100000;
+  s.chain.token = 1000n * 10n ** 18n; // 1,000 TICS of classified house money at the scanned block (1990)
+  const one = await s.call('/treasury', { id: randomUUID(), amountUnits: units, requestedBy: 'owner' });
+  assert.equal(one.status, 200, JSON.stringify(one.data));
+  assert.equal(s.chain.sent.length, 1); assert.equal(s.chain.token, 0n);
+  await s.call('/process', {});
+  assert.equal(s.DB.raw.prepare("SELECT status FROM chain_withdrawals WHERE kind = 'treasury'").get().status, 'sent');
+  // A different customer's 1,000 TICS lands beyond the scan cursor: today's balance is 1,000 again, the historical one too.
+  s.chain.deposit(1000n * 10n ** 18n);
+  assert.equal(BigInt(await s.chain.rpc('eth_call', [{}, '0x7c6'])), 1000n * 10n ** 18n, 'fixture: balance at block 1990 is still the old 1,000');
+  const f = await s.q.freeFloat(s.settings(), s.chain.rpc, s.now(), true);
+  assert.equal(f.safeUnits, 0, 'the house money left; the refill is unscanned customer money');
+  assert.equal(f.freeUnits, 0);
+  const two = await s.call('/treasury', { id: randomUUID(), amountUnits: 1, requestedBy: 'owner' });
+  assert.notEqual(two.status, 200); assert.equal(s.chain.sent.length, 1); assert.equal(s.chain.token, 1000n * 10n ** 18n);
+  // The game side, even with a fresh snapshot and the old send outside the 30 s margin.
+  s.DB.raw.prepare("UPDATE chain_withdrawals SET sent_at = datetime('now', '-2 minutes') WHERE status = 'sent'").run();
+  await refreshFloat(s.env, s.settings(), s.chain.rpc, Date.now());
+  const game = await liveFloat(s.DB, s.settings(), Date.now());
+  assert.equal(game.safeUnits, 0); assert.equal(game.freeUnits, 0); assert.equal(game.maxWinUnits, 0);
+  // Once the scan records and credits the deposit, the money is owed to that player and still not free.
+  // A scan far behind the chain (lag over the limit) also yields nothing free rather than the raw balance.
+  s.chain.block += 400;
+  const lagging = await s.q.freeFloat(s.settings(), s.chain.rpc, s.now(), true);
+  assert.equal(lagging.freeUnits, 0);
 });

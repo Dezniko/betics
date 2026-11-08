@@ -41,7 +41,8 @@ function fakeChain() {
       const f = params[0], from = Number(f.fromBlock), to = Number(f.toBlock);
       // Like Alchemy's free plan: at most 10 blocks per log query.
       if (to - from + 1 > 10) throw new Error('Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range.');
-      return chain.logs.filter((l) => Number(l.blockNumber) >= from && Number(l.blockNumber) <= to && l.address === f.address && l.topics[2] === f.topics[2]);
+      return chain.logs.filter((l) => Number(l.blockNumber) >= from && Number(l.blockNumber) <= to && l.address === f.address
+        && (f.topics[1] == null || l.topics[1] === f.topics[1]) && (f.topics[2] == null || l.topics[2] === f.topics[2]));
     }
     if (method === 'eth_getTransactionReceipt') return chain.receipts.get(params[0]) || null;
     if (method === 'eth_getBlockByNumber' && params[0] === 'finalized') return { number: `0x${(chain.finalized ?? chain.block).toString(16)}` };
