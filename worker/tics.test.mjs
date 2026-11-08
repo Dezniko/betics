@@ -9,10 +9,10 @@ import worker, { DemoCasino } from './index.js';
 import { clearConfigCache } from './platform.js';
 import { createD1 } from '../test-support/d1shim.mjs';
 import { deriveOutcome } from '../backend/src/core/fairness.js';
-import { weiToUnits, unitsToWei, formatTics, normAddress, OFFICIAL_TICS, TRANSFER_TOPIC, decodeTransfers, rpcClient } from './tics.js';
-import { owedUnits, chainTick, parseHoldings, refreshHoldings, HOLDINGS_DAILY_CAP, sweepSpinHolds, liveFloat, reserveSpinExposure, HOLD_ALERT_AFTER_MS, finalizeDeposits, FINAL_MISS_CONFIRM_MS } from './wallet.js';
+import { weiToUnits, unitsToWei, formatTics, normAddress, OFFICIAL_TICS, TRANSFER_TOPIC, decodeTransfers, rpcClient, ticsSettings } from './tics.js';
+import { owedUnits, safeTokenReading, chainTick, parseHoldings, refreshHoldings, HOLDINGS_DAILY_CAP, sweepSpinHolds, liveFloat, reserveSpinExposure, HOLD_ALERT_AFTER_MS, finalizeDeposits, FINAL_MISS_CONFIRM_MS } from './wallet.js';
 
-const MIGRATIONS = ['0001_platform.sql', '0002_payments.sql', '0003_tics.sql', '0004_spin_holds.sql', '0005_audit_fixes.sql', '0006_admin.sql', '0007_r3.sql', '0008_reaudit.sql', '0009_godsofpower.sql'].map((f) => new URL(`../migrations/${f}`, import.meta.url).pathname);
+const MIGRATIONS = ['0001_platform.sql', '0002_payments.sql', '0003_tics.sql', '0004_spin_holds.sql', '0005_audit_fixes.sql', '0006_admin.sql', '0007_r3.sql', '0008_reaudit.sql', '0009_godsofpower.sql', '0010_unresolved_deposits.sql'].map((f) => new URL(`../migrations/${f}`, import.meta.url).pathname);
 const HOST = 'betics.example';
 const CASINO = '0xc0ffee0000000000000000000000000000000001';
 const FAKE_TICS = '0xad34bbc446785fc7f2995578c7273f706ebea177';
@@ -214,10 +214,11 @@ test('deposits: credited once after confirmations, unknown senders and fake toke
     await chainTick(p.env, { rpc: p.chain.rpc });
     w = (await p.call('/api/wallet', { cookie: a.cookie })).data;
     assert.equal(w.realTicsCents, 124100);
-    // Float snapshot: wallet holds everything sent to it, owed = player balances.
+    // Float snapshot: wallet holds everything sent to it, owed = player balances plus the unmatched transfer
+    // (customer money until an owner assigns it or marks it as house funding; security review F2).
     const float = JSON.parse(p.rows("SELECT value FROM chain_state WHERE key = 'float'")[0].value);
-    assert.equal(float.owedUnits, 124100);
-    assert.ok(float.freeUnits >= 5000);
+    assert.equal(float.owedUnits, 124100 + 5010);
+    assert.equal(float.freeUnits, float.tokenUnits - float.owedUnits, 'everything in the wallet is customer money here');
   } finally { p.restore(); }
 });
 
@@ -263,6 +264,10 @@ test('withdrawals: only after a deposit from that wallet, held at once, idempote
     assert.equal((await wd(1000)).status, 403, 'no deposit yet');
     p.chain.transfer({ from: address, wei: 500n * 10n ** 18n, block: 990 });
     await chainTick(p.env, { rpc: p.chain.rpc });
+    // Security review F4: a deposit the owner assigned to this same wallet also makes it eligible.
+    p.DB.raw.prepare("UPDATE chain_deposits SET status = 'assigned' WHERE from_address = ?").run(address);
+    assert.equal((await wd(50001)).status, 402, 'eligible with an assigned deposit from this wallet (refused only for the amount)');
+    p.DB.raw.prepare("UPDATE chain_deposits SET status = 'credited' WHERE from_address = ?").run(address);
     assert.equal((await wd(50001)).status, 402, 'more than the balance');
     assert.equal((await wd(999)).status, 400, 'below the minimum');
     const id = randomUUID();
@@ -1907,5 +1912,48 @@ test('wallet sign in records the first touch the page sends on a new wallet play
     const row = p.rows('SELECT first_referrer, first_campaign FROM players WHERE id = ?', account.address.toLowerCase())[0] || p.rows('SELECT first_referrer, first_campaign FROM players WHERE wallet_address IS NOT NULL')[0];
     assert.equal(row.first_referrer, 'x.com');
     assert.equal(row.first_campaign, 'Spin Week');
+  } finally { p.restore(); }
+});
+
+// Security review F2/F3: unresolved deposits are owed, and an unclassified wallet has no free float at all.
+test('F2/F3: unmatched and uncredited-assigned deposits are owed; no scan cursor and no earlier reading means 0 free float', async () => {
+  const p = platform();
+  try {
+    p.setTics({ casinoWallet: CASINO, realEnabled: true, startBlock: 990, feesEnabled: false });
+    const a = await p.login();
+    await p.call('/api/session', { cookie: a.cookie, body: {} });
+    p.chain.transfer({ from: a.account.address.toLowerCase(), wei: 500n * 10n ** 18n, block: 990 });
+    p.chain.transfer({ from: '0x1111111111111111111111111111111111111111', wei: 200n * 10n ** 18n, block: 991 }); // not a player
+    await chainTick(p.env, { rpc: p.chain.rpc });
+    const settings = await ticsSettings(p.env.DB);
+    const f1 = await liveFloat(p.env.DB, settings, Date.now());
+    assert.equal(p.rows("SELECT status FROM chain_deposits WHERE from_address = '0x1111111111111111111111111111111111111111'")[0].status, 'unmatched');
+    assert.equal(f1.owedUnits, 50000 + 20000, 'player balance plus the unmatched deposit');
+    assert.equal(f1.freeUnits, Math.max(0, f1.safeUnits - 70000));
+    // Claimed for a player but not yet credited: still owed. Credited: owed through the balance, not twice.
+    p.DB.raw.prepare("UPDATE chain_deposits SET status = 'assigned', player_id = ? WHERE from_address = '0x1111111111111111111111111111111111111111'").run(a.account.address.toLowerCase());
+    assert.equal((await owedUnits(p.env.DB)), 70000);
+    p.DB.raw.prepare("UPDATE chain_deposits SET credited_at = datetime('now') WHERE from_address = '0x1111111111111111111111111111111111111111'").run();
+    assert.equal((await owedUnits(p.env.DB)), 50000, 'the player balance would carry it once the wallet credits it');
+    // House funding marked by the owner: not owed.
+    p.DB.raw.prepare("UPDATE chain_deposits SET status = 'ignored', resolution = 'house_funding', credited_at = NULL, player_id = NULL WHERE from_address = '0x1111111111111111111111111111111111111111'").run();
+    assert.equal((await owedUnits(p.env.DB)), 50000);
+    // F3: with no scan cursor, or a failing node, and no earlier protected reading, nothing counts as the casino's own.
+    const live = (await liveFloat(p.env.DB, settings, Date.now())).tokenUnits;
+    p.DB.raw.prepare("DELETE FROM chain_state WHERE key IN ('tics_watch_full', 'tics_watch')").run();
+    const noCursor = await safeTokenReading(p.env.DB, settings, p.chain.rpc, live, null);
+    assert.deepEqual([noCursor.units, noCursor.unknown], [0, true]);
+    const failing = await safeTokenReading(p.env.DB, settings, async () => { throw new Error('node down'); }, live, null);
+    assert.deepEqual([failing.units, failing.unknown], [0, true]);
+    // With an earlier reading of this wallet the fallback can only stay the same or fall.
+    const withPrior = await safeTokenReading(p.env.DB, settings, async () => { throw new Error('node down'); }, live, { safeTokenUnits: 1234, wallet: settings.casinoWallet, chainId: settings.chainId });
+    assert.deepEqual([withPrior.units, withPrior.unknown], [Math.min(live, 1234), undefined]);
+    // And a snapshot built from an unknown reading gives no free float and books no exposure.
+    p.DB.raw.prepare("DELETE FROM chain_state WHERE key = 'float'").run();
+    const later = Date.now() + 20_000; // past the 15 s read cache of the earlier snapshot
+    p.DB.raw.prepare("INSERT INTO chain_state (key, value) VALUES ('float', ?)").run(JSON.stringify({ at: later, chainId: settings.chainId, wallet: settings.casinoWallet, tokenUnits: live, safeTokenUnits: 0, safeUnknown: true, owedUnits: 50000, freeUnits: live - 50000 }));
+    const f2 = await liveFloat(p.env.DB, settings, later);
+    assert.equal(f2.freeUnits, 0); assert.equal(f2.maxWinUnits, 0);
+    assert.equal(await reserveSpinExposure(p.env.DB, { id: randomUUID(), playerId: 'x', units: 100, now: later }), false, 'no exposure can be booked');
   } finally { p.restore(); }
 });

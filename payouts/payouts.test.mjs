@@ -9,7 +9,7 @@ import { DemoCasino } from '../worker/index.js';
 import { createD1 } from '../test-support/d1shim.mjs';
 import { OFFICIAL_TICS, ERC20_ABI, TRANSFER_TOPIC } from '../worker/tics.js';
 
-const MIGRATIONS = ['0001_platform.sql', '0002_payments.sql', '0003_tics.sql', '0004_spin_holds.sql', '0005_audit_fixes.sql', '0006_admin.sql', '0007_r3.sql', '0008_reaudit.sql', '0009_godsofpower.sql'].map((f) => new URL(`../migrations/${f}`, import.meta.url).pathname);
+const MIGRATIONS = ['0001_platform.sql', '0002_payments.sql', '0003_tics.sql', '0004_spin_holds.sql', '0005_audit_fixes.sql', '0006_admin.sql', '0007_r3.sql', '0008_reaudit.sql', '0009_godsofpower.sql', '0010_unresolved_deposits.sql'].map((f) => new URL(`../migrations/${f}`, import.meta.url).pathname);
 
 function doStorage() {
   const db = new DatabaseSync(':memory:');
@@ -85,6 +85,8 @@ async function setup() {
   DB.raw.prepare("INSERT INTO settings (key, value) VALUES ('casino_key_ct', ?)").run(JSON.stringify(await encryptKey(pk, kek)));
   const cur = JSON.parse(DB.raw.prepare("SELECT value FROM settings WHERE key = 'tics_payments'").get().value);
   DB.raw.prepare("UPDATE settings SET value = ? WHERE key = 'tics_payments'").run(JSON.stringify({ ...cur, casinoWallet: casino, realEnabled: true, treasuryAddress: '0x9999999999999999999999999999999999999999', confirmations: 1 }));
+  // The deposit scan has classified this wallet up to a recent block (otherwise nothing counts as the casino's own; see the F1/F3 tests).
+  DB.raw.prepare("INSERT INTO chain_state (key, value) VALUES ('tics_watch_full', ?)").run(JSON.stringify({ chainId: 1, wallet: casino, lastBlock: 1990 }));
   const call = (path, body, secret = 's3cret', treasurySecret = 'tr3asury') => payouts.fetch(new Request(`https://payouts${path}`, { method: body ? 'POST' : 'GET',
     headers: { 'X-Internal-Secret': secret, ...(treasurySecret == null ? {} : { 'X-Treasury-Secret': treasurySecret }), 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }), env).then(async (r) => ({ status: r.status, data: await r.json() }));
   // A funded player with a held withdrawal, as the game Worker would create it.
@@ -1216,4 +1218,28 @@ test('R4-1: a node or wallet outage blocks nothing, whatever the node says; a lo
   for (let i = 0; i < 30; i++) { u.advance(60000); await u.call('/process', {}); }
   assert.equal(u.row(qid).status, 'queued');
   assert.equal(u.alerts('tics_payout_failing').length, 0);
+});
+
+// Security review F1/F3: the signer only spends the PROTECTED part of the wallet, computed by itself.
+test('F1/F3: a wallet whose deposits are not classified yet has nothing free for the treasury; unresolved deposits are owed', async () => {
+  const s = await setup();
+  s.chain.token = 1000n * 10n ** 18n;
+  // No scan cursor and no earlier protected reading: 0 free, the send is refused, the wallet keeps every token.
+  s.DB.raw.prepare("DELETE FROM chain_state WHERE key IN ('tics_watch_full', 'tics_watch', 'float')").run();
+  const st = await s.call('/status');
+  assert.equal(st.data.freeUnits, 0); assert.equal(st.data.safeUnknown, true);
+  assert.equal((await s.call('/treasury', { id: randomUUID(), amountUnits: 100, requestedBy: 'owner' })).status, 400);
+  assert.equal(s.chain.sent.length, 0); assert.equal(s.chain.token, 1000n * 10n ** 18n);
+  // Classified again: an unmatched customer deposit (sender is not a player) is owed, not free.
+  s.DB.raw.prepare("INSERT INTO chain_state (key, value) VALUES ('tics_watch_full', ?)").run(JSON.stringify({ chainId: 1, wallet: s.casino, lastBlock: 1990 }));
+  assert.equal((await s.call('/status')).data.freeUnits, 100000);
+  const tx = '0x' + 'b'.repeat(64);
+  s.DB.raw.prepare("INSERT INTO chain_deposits (id, chain_id, tx_hash, log_index, block_number, from_address, to_address, amount_wei, amount_units, status, tx_ordinal) VALUES (?, 1, ?, 0, 1900, ?, ?, ?, ?, 'unmatched', 0)")
+    .run('1:' + tx + ':0', tx, '0x1111111111111111111111111111111111111111', s.casino, (400n * 10n ** 18n).toString(), 40000);
+  assert.equal((await s.call('/status')).data.freeUnits, 60000);
+  assert.equal((await s.call('/treasury', { id: randomUUID(), amountUnits: 60001, requestedBy: 'owner' })).status, 400);
+  assert.equal((await s.call('/treasury', { id: randomUUID(), amountUnits: 60000, requestedBy: 'owner' })).status, 200);
+  // Marked as the house's own funding by the owner: free again. Assigned and credited to a player: owed through the balance instead.
+  s.DB.raw.prepare("UPDATE chain_deposits SET status = 'ignored', resolution = 'house_funding', resolved_at = datetime('now'), resolved_by = 'owner' WHERE tx_hash = ?").run(tx);
+  assert.equal((await s.call('/status')).data.owedUnits, 60000, 'the treasury send in flight is owed, the house funding is not');
 });

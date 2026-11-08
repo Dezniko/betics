@@ -17,7 +17,7 @@ import { SLOT_MATH, BET_LEVELS } from '../backend/src/games/slotsMath.js';
 import { makeUint32At } from '../backend/src/core/slotDraws.js';
 import { pageFor, withPageHead } from './seo.js';
 
-const MIGRATIONS = ['0001_platform.sql', '0002_payments.sql', '0003_tics.sql', '0004_spin_holds.sql', '0005_audit_fixes.sql', '0006_admin.sql', '0007_r3.sql', '0008_reaudit.sql', '0009_godsofpower.sql'].map((f) => new URL(`../migrations/${f}`, import.meta.url).pathname);
+const MIGRATIONS = ['0001_platform.sql', '0002_payments.sql', '0003_tics.sql', '0004_spin_holds.sql', '0005_audit_fixes.sql', '0006_admin.sql', '0007_r3.sql', '0008_reaudit.sql', '0009_godsofpower.sql', '0010_unresolved_deposits.sql'].map((f) => new URL(`../migrations/${f}`, import.meta.url).pathname);
 const HOST = 'betics.example';
 const CASINO = '0xc0ffee0000000000000000000000000000000001';
 

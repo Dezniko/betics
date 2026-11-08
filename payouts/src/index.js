@@ -8,6 +8,7 @@ import { keccak256, parseTransaction } from 'viem';
 import {
   ticsSettings, rpcClient, rpcUrl, hexToNumber, unitsToWei, weiToUnits, tokenBalance, transferData, formatTics, normAddress, decodeTransfers,
 } from '../../worker/tics.js';
+import { UNRESOLVED_DEPOSITS_SQL, safeTokenReading } from '../../worker/wallet.js';
 
 const INTERNAL_HEADER = 'X-Internal-Secret';
 const AAD = new TextEncoder().encode('betics-casino-wallet-v1');
@@ -169,7 +170,8 @@ async function pause(env, reason) {
 async function owedUnits(db) {
   const row = await db.prepare(`SELECT (SELECT COALESCE(SUM(real_tics_cents), 0) FROM players WHERE real_tics_cents > 0)
       + (SELECT COALESCE(SUM(amount_units), 0) FROM chain_withdrawals WHERE kind = 'player' AND status IN ('holding','queued','signing','sending','blocked','cancelling'))
-      + (SELECT COALESCE(SUM(amount_units), 0) FROM chain_withdrawals WHERE kind = 'treasury' AND status IN ('queued','signing','sending')) AS n`).first();
+      + (SELECT COALESCE(SUM(amount_units), 0) FROM chain_withdrawals WHERE kind = 'treasury' AND status IN ('queued','signing','sending'))
+      + ${UNRESOLVED_DEPOSITS_SQL} AS n`).first();
   return row?.n || 0;
 }
 // Treasury sends only: a player's balance counts as the larger of players.real_tics_cents and the newest real $TICS
@@ -180,7 +182,8 @@ async function owedUnitsStrict(db) {
   const row = await db.prepare(`SELECT (SELECT COALESCE(SUM(max(COALESCE(p.real_tics_cents, 0), COALESCE((SELECT l.balance_after_cents FROM ledger l
         WHERE l.player_id = p.id AND l.real_money = 1 AND l.currency = 'TICS' ORDER BY l.created_at DESC, l.rowid DESC LIMIT 1), 0))), 0) FROM players p)
       + (SELECT COALESCE(SUM(amount_units), 0) FROM chain_withdrawals WHERE kind = 'player' AND status IN ('holding','queued','signing','sending','blocked','cancelling'))
-      + (SELECT COALESCE(SUM(amount_units), 0) FROM chain_withdrawals WHERE kind = 'treasury' AND status IN ('queued','signing','sending')) AS n`).first();
+      + (SELECT COALESCE(SUM(amount_units), 0) FROM chain_withdrawals WHERE kind = 'treasury' AND status IN ('queued','signing','sending'))
+      + ${UNRESOLVED_DEPOSITS_SQL} AS n`).first();
   return row?.n || 0;
 }
 async function spinHoldUnits(db, nowMs) {
@@ -393,11 +396,19 @@ export class PayoutQueue {
   }
 
   // strict (treasury sends): owed also respects the ledger floor (owedUnitsStrict).
+  // Free float as the signer sees it, computed here from the chain, never taken from the admin's figures.
+  // Only the PROTECTED part of the wallet balance counts (security review F1): tokens that arrived but are not yet
+  // classified by the deposit scan are customer money. safeTokenReading reads the balance at the last scanned block
+  // itself; with no earlier reading and no scan it answers 0, so a fresh wallet can never be emptied to the treasury.
   async freeFloat(settings, rpc, now, strict = false) {
     const token = pinned(this.env)?.token || settings.token;
-    const [tokenWei, owed, held] = await Promise.all([tokenBalance(rpc, token, settings.casinoWallet), (strict ? owedUnitsStrict : owedUnits)(this.env.DB), spinHoldUnits(this.env.DB, now)]);
+    const db = this.env.DB;
+    const [tokenWei, owed, held, previous] = await Promise.all([tokenBalance(rpc, token, settings.casinoWallet), (strict ? owedUnitsStrict : owedUnits)(db), spinHoldUnits(db, now),
+      db.prepare("SELECT value FROM chain_state WHERE key = 'float'").first().then((r) => (r ? JSON.parse(r.value) : null)).catch(() => null)]);
     const tokenUnits = weiToUnits(tokenWei);
-    return { tokenUnits, owedUnits: owed, spinHoldUnits: held, freeUnits: tokenUnits - owed - held };
+    const safe = await safeTokenReading(db, { ...settings, token }, rpc, tokenUnits, previous);
+    const safeUnits = Math.min(tokenUnits, safe.units);
+    return { tokenUnits, safeUnits, safeUnknown: !!safe.unknown, owedUnits: owed, spinHoldUnits: held, freeUnits: safeUnits - owed - held };
   }
 
   async status() {

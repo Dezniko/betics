@@ -294,9 +294,19 @@ export async function publicReserve(db, settings, straightMultiplier = 36, now =
 }
 // What the casino owes or is already sending: every player's real balance, player withdrawals not yet
 // paid (including 'holding', created just before the money is set aside), and treasury sends in flight.
+// Unresolved customer deposits (security review F2): tokens that reached the wallet from a sender who is not a
+// player yet (unmatched), below the minimum (refundable), or claimed for a player but not yet credited. They are
+// owed to someone until an owner assigns them to a player (then the player balance carries them) or marks them as
+// the house's own funding. Uses the index chain_deposits_status.
+export const UNRESOLVED_DEPOSITS_SQL = `(SELECT COALESCE(SUM(amount_units), 0) FROM chain_deposits
+      WHERE reversed_at IS NULL AND (status IN ('unmatched', 'below_min') OR (status = 'assigned' AND credited_at IS NULL)))`;
 export const OWED_SQL = `(SELECT COALESCE(SUM(real_tics_cents), 0) FROM players WHERE real_tics_cents > 0)
       + (SELECT COALESCE(SUM(amount_units), 0) FROM chain_withdrawals WHERE kind = 'player' AND status IN ('holding','queued','signing','sending','blocked','cancelling'))
-      + (SELECT COALESCE(SUM(amount_units), 0) FROM chain_withdrawals WHERE kind = 'treasury' AND status IN ('queued','signing','sending'))`;
+      + (SELECT COALESCE(SUM(amount_units), 0) FROM chain_withdrawals WHERE kind = 'treasury' AND status IN ('queued','signing','sending'))
+      + ${UNRESOLVED_DEPOSITS_SQL}`;
+export async function unresolvedDepositUnits(db) {
+  return (await db.prepare(`SELECT ${UNRESOLVED_DEPOSITS_SQL} AS n`).first()).n || 0;
+}
 export async function owedUnits(db) {
   return (await db.prepare(`SELECT ${OWED_SQL} AS n`).first()).n || 0;
 }
@@ -313,7 +323,9 @@ export { raise as raiseAlert };
 export async function safeTokenReading(db, settings, rpc, latestUnits, previous = null) {
   // Only a reading of this same wallet on this same chain can cap the new one.
   const prior = Number.isSafeInteger(previous?.safeTokenUnits) && previous.wallet === settings.casinoWallet && previous.chainId === settings.chainId ? previous.safeTokenUnits : null;
-  const conservative = (block = null) => ({ units: prior === null ? latestUnits : Math.min(latestUnits, prior), block });
+  // No usable classification and no earlier protected reading of this wallet: nothing may be treated as the
+  // casino's own (security review F3). With an earlier reading, the new one can only stay the same or fall.
+  const conservative = (block = null) => (prior === null ? { units: 0, block, unknown: true } : { units: Math.min(latestUnits, prior), block });
   try {
     const latest = hexToNumber(await rpc('eth_blockNumber'));
     let block = latest - Math.max(1, settings.confirmations);
@@ -348,7 +360,7 @@ export async function refreshFloat(env, settings, rpc, now = Date.now()) {
   const inFlight = (await db.prepare("SELECT COALESCE(SUM(amount_units),0) AS n FROM chain_withdrawals WHERE status = 'sending'").first())?.n || 0;
   const previous = previous0;
   const insolvent = tokenUnits < owed - inFlight;
-  const snapshot = { at: now, chainId: settings.chainId, wallet: settings.casinoWallet, tokenUnits, safeTokenUnits: safe.units, safeBlock: safe.block, ethWei: ethWei.toString(), owedUnits: owed, freeUnits: tokenUnits - owed, insolvent };
+  const snapshot = { at: now, chainId: settings.chainId, wallet: settings.casinoWallet, tokenUnits, safeTokenUnits: safe.units, safeBlock: safe.block, safeUnknown: !!safe.unknown, ethWei: ethWei.toString(), owedUnits: owed, freeUnits: tokenUnits - owed, insolvent };
   const hour = sqlTime(now).slice(0, 13);
   const statements = [db.prepare(`INSERT INTO chain_state (key, value) VALUES ('float', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`).bind(JSON.stringify(snapshot))];
   if (insolvent && previous?.insolvent) {
@@ -765,7 +777,8 @@ export async function requestWithdrawal(env, player, body, settings, now = Date.
     return { withdrawalId: id, status: existing.status === 'holding' ? 'pending' : existing.status, duplicate: true };
   }
   // Only a wallet that has deposited $TICS itself can withdraw.
-  const deposited = await db.prepare("SELECT 1 AS ok FROM chain_deposits WHERE from_address = ? AND status = 'credited' AND credited_at IS NOT NULL LIMIT 1").bind(player.wallet_address).first();
+  // A deposit assigned by the owner counts too, as long as it came from this same wallet (security review F4).
+  const deposited = await db.prepare("SELECT 1 AS ok FROM chain_deposits WHERE from_address = ? AND status IN ('credited', 'assigned') AND credited_at IS NOT NULL AND reversed_at IS NULL LIMIT 1").bind(player.wallet_address).first();
   if (!deposited) fail(403, 'Withdrawals are only possible to a wallet that has made a deposit.');
   // The player pays the network fee. The browser sends the most it agreed to pay (from the quote).
   const { feeCents: fee } = await withdrawalFee(db, settings, now);
