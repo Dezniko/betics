@@ -227,8 +227,8 @@ test('in-app links: the logo and Lobby pills go to /, the games are reached at /
   for (const f of ['Terms.jsx', 'HowItWorks.jsx']) assert.match(read(f), /href="\/">Back to the lobby</, `${f} back link goes home`);
   const lobby = read('Lobby.jsx');
   assert.match(lobby, /href: '\/roulette'/); assert.match(lobby, /href: '\/godsofpower'/);
-  assert.match(lobby, /European wheel', '97\.3% payback', 'Bets from 1 \$TICS'/);
-  assert.match(lobby, /5 reels, 20 lines', 'Free spins', '92% payback', 'Bets from 20 \$TICS'/);
+  assert.match(lobby, /European wheel', 'Provably fair', 'Bets from 1 \$TICS'/);
+  assert.match(lobby, /5 reels, 20 lines', 'Free spins', 'Provably fair', 'Bets from 20 \$TICS'/);
   assert.match(lobby, /<AgeGate onAccept=\{session\.acceptAge\} \/>/, 'the 18+ gate shows on the lobby too');
   assert.match(lobby, /data-testid=\{`play-\$\{game\.id\}`\}/);
   assert.match(lobby, /<CasinoReserve variant="card"/);

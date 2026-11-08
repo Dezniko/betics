@@ -20,9 +20,9 @@ import './lobby.css';
 // and the help links. One screen on every viewport: nothing scrolls.
 export const GAMES = Object.freeze([
   Object.freeze({ id: 'roulette', href: '/roulette', name: 'Roulette', tagline: 'Classic European roulette on green felt, every spin checkable in your browser.',
-    facts: Object.freeze(['European wheel', '97.3% payback', 'Bets from 1 $TICS']) }),
+    facts: Object.freeze(['European wheel', 'Provably fair', 'Bets from 1 $TICS']) }),
   Object.freeze({ id: 'godsofpower', href: '/godsofpower', name: 'Gods of Power', tagline: 'Five reels of crypto treasure, a vault of free spins, a portrait that pays.',
-    facts: Object.freeze(['5 reels, 20 lines', 'Free spins', '92% payback', 'Bets from 20 $TICS']) }),
+    facts: Object.freeze(['5 reels, 20 lines', 'Free spins', 'Provably fair', 'Bets from 20 $TICS']) }),
 ]);
 export const WELCOME = 'Pick a game. One balance, provably fair rounds, your wallet stays yours.';
 
